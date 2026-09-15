@@ -128,7 +128,12 @@ function SchemaRow({
   onToggle: () => void
   onDelete: () => void
 }) {
-  const fieldCount = Object.keys(JSON.parse(schema.fieldMapJson || '{}')).length
+  let fieldCount = 0
+  try {
+    fieldCount = Object.keys(JSON.parse(schema.fieldMapJson || '{}')).length
+  } catch {
+    fieldCount = 0
+  }
 
   return (
     <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, overflow: 'hidden' }}>

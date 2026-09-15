@@ -295,6 +295,15 @@ public class AdminController(
     private static string Csv(string? value)
     {
         if (string.IsNullOrEmpty(value)) return "";
+
+        // Neutralize formula injection (CSV/DDE) for values that could be interpreted
+        // as formulas by Excel/Sheets when opened, e.g. a captured Host or Path
+        // starting with '=', '+', '-', '@', tab, or CR.
+        if (value.Length > 0 && (value[0] is '=' or '+' or '-' or '@' or '\t' or '\r'))
+        {
+            value = "'" + value;
+        }
+
         return value.Contains(',') || value.Contains('"') || value.Contains('\n')
             ? $"\"{value.Replace("\"", "\"\"")}\""
             : value;
