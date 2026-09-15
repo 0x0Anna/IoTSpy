@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Overridable for dockerized dev (e.g. VITE_BACKEND_HOST=host.docker.internal),
+// since the frontend container's own `localhost` isn't the host machine's.
+const backendTarget = `http://${process.env.VITE_BACKEND_HOST ?? 'localhost'}:5000`
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -22,7 +26,7 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.removeAllListeners('error')
@@ -37,7 +41,7 @@ export default defineConfig({
         },
       },
       '/hubs': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
         ws: true,
         configure: (proxy) => {
