@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom'
+import '@testing-library/jest-dom/vitest'
 
 // Node.js 25 ships a built-in `localStorage` stub that is non-functional when
 // `--localstorage-file` is not set.  jsdom cannot override a non-configurable

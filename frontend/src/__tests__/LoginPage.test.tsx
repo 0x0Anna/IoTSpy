@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import LoginPage from '../pages/LoginPage'
-import { ApiError } from '../api/client'
+import { ApiError, NetworkError } from '../api/client'
 import type { AuthState } from '../store/authStore'
 
 const mockLogin = vi.fn()
@@ -17,8 +17,9 @@ vi.mock('../store/authStore', () => ({
 
 import { useAuthState } from '../store/authStore'
 
-const singleUserState: AuthState = { status: 'unauthenticated', token: null, multiUser: false }
-const multiUserState: AuthState = { status: 'unauthenticated', token: null, multiUser: true }
+const singleUserState: AuthState = { status: 'unauthenticated', token: null, multiUser: false, backendUnavailable: false }
+const multiUserState: AuthState = { status: 'unauthenticated', token: null, multiUser: true, backendUnavailable: false }
+const backendDownState: AuthState = { status: 'unauthenticated', token: null, multiUser: false, backendUnavailable: true }
 
 describe('LoginPage', () => {
   beforeEach(() => {
@@ -71,5 +72,31 @@ describe('LoginPage', () => {
     await userEvent.type(screen.getByLabelText('Password'), 'secret')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(screen.getByRole('button', { name: 'Signing in…' })).toBeDisabled()
+  })
+
+  it('shows a disconnect banner when the backend is unavailable', () => {
+    vi.mocked(useAuthState).mockReturnValue(backendDownState)
+    render(<LoginPage />)
+    expect(screen.getByRole('alert')).toHaveTextContent(/backend is unavailable/i)
+  })
+
+  it('shows a network-specific message when login fails to reach the server', async () => {
+    mockLogin.mockRejectedValueOnce(new NetworkError())
+    render(<LoginPage />)
+    await userEvent.type(screen.getByLabelText('Password'), 'secret')
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await waitFor(() =>
+      expect(screen.getByText('Cannot reach the server. Please check your connection and try again.')).toBeInTheDocument(),
+    )
+  })
+
+  it('shows a generic server-error message on a 5xx login response', async () => {
+    mockLogin.mockRejectedValueOnce(new ApiError(500, 'Internal Server Error'))
+    render(<LoginPage />)
+    await userEvent.type(screen.getByLabelText('Password'), 'secret')
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await waitFor(() =>
+      expect(screen.getByText('Server error — please try again shortly.')).toBeInTheDocument(),
+    )
   })
 })

@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { ApiError } from '../api/client'
+import { ApiError, NetworkError } from '../api/client'
 import { useLogin } from '../hooks/useAuth'
 import { useAuthState } from '../store/authStore'
+import DisconnectBanner from '../components/common/DisconnectBanner'
 import '../styles/auth.css'
 
 export default function LoginPage() {
   const login = useLogin()
-  const { multiUser } = useAuthState()
+  const { multiUser, backendUnavailable } = useAuthState()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -19,7 +20,13 @@ export default function LoginPage() {
     try {
       await login({ username: multiUser ? username : 'admin', password })
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed.')
+      if (err instanceof NetworkError) {
+        setError('Cannot reach the server. Please check your connection and try again.')
+      } else if (err instanceof ApiError) {
+        setError(err.status >= 500 ? 'Server error — please try again shortly.' : err.message)
+      } else {
+        setError('Login failed.')
+      }
     } finally {
       setLoading(false)
     }
@@ -33,6 +40,7 @@ export default function LoginPage() {
           <span className="auth-title">IoTSpy</span>
         </div>
         <p className="auth-subtitle">Sign in to your dashboard.</p>
+        {backendUnavailable && <DisconnectBanner status="down" />}
         <form className="auth-form" onSubmit={handleSubmit}>
           {error && <div className="auth-error">{error}</div>}
           {multiUser && (

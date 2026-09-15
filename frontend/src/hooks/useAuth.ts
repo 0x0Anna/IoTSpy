@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { getToken, setOnUnauthorized } from '../api/client'
+import { getToken, setOnUnauthorized, NetworkError } from '../api/client'
 import { getAuthStatus, getMe, login as apiLogin, setup as apiSetup } from '../api/auth'
 import {
   dispatchLogin,
@@ -34,6 +34,7 @@ export function useAuthInit(): AuthState {
       try {
         const { passwordSet, multiUser } = await getAuthStatus()
         if (cancelled) return
+        dispatch({ type: 'SET_BACKEND_UNAVAILABLE', value: false })
         dispatch({ type: 'SET_MULTI_USER', value: multiUser ?? false })
         if (!passwordSet) {
           dispatch({ type: 'SET_NO_PASSWORD' })
@@ -62,8 +63,13 @@ export function useAuthInit(): AuthState {
         if (['/login', '/setup'].includes(location.pathname)) {
           navigate('/', { replace: true })
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
+          // Distinguish "server is unreachable" from a normal logged-out state so
+          // the login page can show a banner instead of just failing the submit.
+          if (err instanceof NetworkError) {
+            dispatch({ type: 'SET_BACKEND_UNAVAILABLE', value: true })
+          }
           dispatch({ type: 'SET_UNAUTHENTICATED' })
           navigate('/login', { replace: true })
         }
@@ -76,6 +82,22 @@ export function useAuthInit(): AuthState {
       cancelled = true
     }
   }, [state.status, dispatch, navigate, location.pathname])
+
+  // While the backend was unreachable, poll until it's back, then re-run init.
+  useEffect(() => {
+    if (!state.backendUnavailable) return
+    let cancelled = false
+    const id = setInterval(async () => {
+      const reachable = await getAuthStatus().then(() => true).catch(() => false)
+      if (cancelled || !reachable) return
+      dispatch({ type: 'SET_BACKEND_UNAVAILABLE', value: false })
+      dispatch({ type: 'RESET_TO_UNKNOWN' })
+    }, 5_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [state.backendUnavailable, dispatch])
 
   return state
 }

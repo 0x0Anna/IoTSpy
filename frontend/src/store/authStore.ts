@@ -15,12 +15,16 @@ export interface AuthState {
   status: AuthStatus
   token: string | null
   multiUser: boolean
+  // Set when the initial auth-status check couldn't reach the backend at all
+  // (as opposed to a normal 401/logged-out state). Cleared once it's reachable again.
+  backendUnavailable: boolean
 }
 
 export const initialState: AuthState = {
   status: 'unknown',
   token: null,
   multiUser: false,
+  backendUnavailable: false,
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -30,6 +34,8 @@ type AuthAction =
   | { type: 'SET_UNAUTHENTICATED' }
   | { type: 'SET_AUTHENTICATED'; token: string }
   | { type: 'SET_MULTI_USER'; value: boolean }
+  | { type: 'SET_BACKEND_UNAVAILABLE'; value: boolean }
+  | { type: 'RESET_TO_UNKNOWN' }
   | { type: 'LOGOUT' }
 
 export function authReducer(state: AuthState, action: AuthAction): AuthState {
@@ -42,6 +48,10 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
       return { ...state, status: 'authenticated', token: action.token }
     case 'SET_MULTI_USER':
       return { ...state, multiUser: action.value }
+    case 'SET_BACKEND_UNAVAILABLE':
+      return { ...state, backendUnavailable: action.value }
+    case 'RESET_TO_UNKNOWN':
+      return { ...state, status: 'unknown' }
     case 'LOGOUT':
       clearToken()
       return { ...state, status: 'unauthenticated', token: null }

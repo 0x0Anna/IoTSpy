@@ -173,7 +173,10 @@ public sealed class PluginLoaderService : IPluginRegistry
         if (_requireSignedPlugins && _verifier.TrustedThumbprintCount == 0)
             _logger.LogWarning(
                 "RequireSignedPlugins=true but Plugins:TrustedSignerThumbprints is empty — any self-signed DLL will be accepted as Trusted");
-        LoadAll();
+        lock (_lock)
+        {
+            LoadAll();
+        }
     }
 }
 
