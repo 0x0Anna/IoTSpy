@@ -93,6 +93,16 @@ https:
 frontend:
   origin: ""
 
+# ── OpenTelemetry tracing (backlog #51) ───────────────────────────────────────
+# Opt-in: leave enabled=false unless an OTLP collector (Tempo, Jaeger, the Otel
+# Collector, etc.) is reachable from the cluster at otlpEndpoint. When disabled, the
+# app never registers the tracing pipeline (see Program.cs).
+otel:
+  enabled: false
+  serviceName: "IoTSpy.Api"
+  # e.g. http://otel-collector.observability.svc.cluster.local:4317
+  otlpEndpoint: "http://localhost:4317"
+
 # ── Alerting ─────────────────────────────────────────────────────────────────
 alerting:
   enabled: false

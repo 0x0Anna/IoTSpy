@@ -29,6 +29,15 @@
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="10.0.11" />
     <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
     <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.0" />
+    <!-- OpenTelemetry tracing (backlog #51) — opt-in via Otel:Enabled, see Program.cs.
+         EF Core instrumentation (OpenTelemetry.Instrumentation.EntityFrameworkCore) is
+         intentionally NOT referenced: as of this writing every published version is still
+         beta (1.18.0-beta.1, contrib repo, never stabilized) — not something to pull into
+         a production tracing path. Revisit once/if it ships a stable release. -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
   </ItemGroup>
 
   <ItemGroup>

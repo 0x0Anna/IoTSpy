@@ -26,6 +26,8 @@ using Microsoft.IdentityModel.Tokens;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using IoTSpy.Api.Validators;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Prometheus;
 using Scalar.AspNetCore;
 using Serilog;
@@ -34,9 +36,13 @@ using StackExchange.Redis;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Serilog (Phase 8.2) ───────────────────────────────────────────────────────
+// Enrich.With<ActivityTraceEnricher> stamps TraceId/SpanId from the current Activity
+// (backlog #51) so a log line and a trace span for the same request can be joined.
+// It is a no-op when no Activity is current (e.g. Otel:Enabled is false).
 builder.Host.UseSerilog((ctx, cfg) =>
     cfg.ReadFrom.Configuration(ctx.Configuration)
-       .Enrich.FromLogContext());
+       .Enrich.FromLogContext()
+       .Enrich.With<ActivityTraceEnricher>());
 
 // ── Kestrel HTTPS (Phase 16.1) ────────────────────────────────────────────────
 builder.Services.AddSingleton<HttpsCertificateHolder>();
@@ -276,6 +282,24 @@ builder.Services.AddSingleton<IPluginRegistry>(sp =>
     svc.Initialize();
     return svc;
 });
+
+// ── OpenTelemetry tracing (backlog #51) ───────────────────────────────────────
+// Opt-in: registering the tracing pipeline only when Otel:Enabled is true (default
+// false) so existing deployments aren't forced to stand up an OTLP collector. Unlike a
+// no-op exporter, this skips AddOpenTelemetry()/WithTracing() entirely when disabled.
+var otelOptions = builder.Configuration
+    .GetSection(OtelOptions.SectionName)
+    .Get<OtelOptions>() ?? new OtelOptions();
+
+if (otelOptions.Enabled)
+{
+    builder.Services.AddOpenTelemetry()
+        .ConfigureResource(resource => resource.AddService(otelOptions.ServiceName))
+        .WithTracing(tracing => tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddOtlpExporter(otlp => otlp.Endpoint = new Uri(otelOptions.OtlpEndpoint)));
+}
 
 // ── CORS (for Vite dev server) ─────────────────────────────────────────────
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(policy =>
