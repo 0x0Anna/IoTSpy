@@ -97,6 +97,174 @@ public class ScheduledScanControllerTests
     }
 
     [Fact]
+    public async Task Create_WithCidrTarget_ReturnsOk()
+    {
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.AddAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *", TargetCidr: "10.0.0.0/24");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var scan = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Null(scan.DeviceId);
+        Assert.Equal("10.0.0.0/24", scan.TargetCidr);
+        await deviceRepo.DidNotReceive().GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Create_WithTagTarget_ReturnsOk()
+    {
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.AddAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *", TargetTag: "camera");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var scan = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Equal("camera", scan.TargetTag);
+    }
+
+    [Fact]
+    public async Task Create_WithTagTarget_TrimsWhitespace()
+    {
+        // Device tags are trimmed at match time (ScheduledScanService.DeviceHasTag) — if the
+        // stored TargetTag itself isn't also trimmed, a value with stray whitespace would
+        // silently match zero devices. Regression test for that asymmetry.
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.AddAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *", TargetTag: "  camera  ");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var scan = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Equal("camera", scan.TargetTag);
+    }
+
+    [Fact]
+    public async Task Create_WithCidrTarget_TrimsWhitespace()
+    {
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.AddAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *", TargetCidr: "  10.0.0.0/24  ");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var scan = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Equal("10.0.0.0/24", scan.TargetCidr);
+    }
+
+    [Fact]
+    public async Task Update_WithTagTarget_TrimsWhitespace()
+    {
+        var existing = new ScheduledScan { Id = Guid.NewGuid(), TargetTag = "old-tag", CronExpression = "0 * * * *" };
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.GetByIdAsync(existing.Id, Arg.Any<CancellationToken>()).Returns(existing);
+        scanRepo.UpdateAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new UpdateScheduledScanDto(TargetTag: "  camera  ");
+        var result = await controller.Update(existing.Id, dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var updated = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Equal("camera", updated.TargetTag);
+    }
+
+    [Fact]
+    public async Task Create_WithNoTargetSelected_ReturnsBadRequest()
+    {
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        await scanRepo.DidNotReceive().AddAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Create_WithBothDeviceIdAndCidr_ReturnsBadRequest()
+    {
+        var deviceId = Guid.NewGuid();
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(deviceId, "0 * * * *", TargetCidr: "10.0.0.0/24");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task Create_WithInvalidCidr_ReturnsBadRequest()
+    {
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new CreateScheduledScanDto(null, "0 * * * *", TargetCidr: "not-a-cidr");
+        var result = await controller.Create(dto, TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task Update_SwitchingFromDeviceToCidr_ClearsDeviceId()
+    {
+        var scan = MakeScan();
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.GetByIdAsync(scan.Id, Arg.Any<CancellationToken>()).Returns(scan);
+        scanRepo.UpdateAsync(Arg.Any<ScheduledScan>(), Arg.Any<CancellationToken>())
+                .Returns(x => x.ArgAt<ScheduledScan>(0));
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new UpdateScheduledScanDto(TargetCidr: "10.0.0.0/24");
+        var result = await controller.Update(scan.Id, dto, TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var updated = Assert.IsType<ScheduledScan>(result.Value);
+        Assert.Null(updated.DeviceId);
+        Assert.Equal("10.0.0.0/24", updated.TargetCidr);
+    }
+
+    [Fact]
+    public async Task Update_WithMoreThanOneTargetSelector_ReturnsBadRequest()
+    {
+        var scan = MakeScan();
+        var scanRepo = Substitute.For<IScheduledScanRepository>();
+        var deviceRepo = Substitute.For<IDeviceRepository>();
+        scanRepo.GetByIdAsync(scan.Id, Arg.Any<CancellationToken>()).Returns(scan);
+
+        var controller = new ScheduledScanController(scanRepo, deviceRepo);
+        var dto = new UpdateScheduledScanDto(TargetCidr: "10.0.0.0/24", TargetTag: "camera");
+        var result = await controller.Update(scan.Id, dto, TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
     public async Task Delete_CallsRepoAndReturnsNoContent()
     {
         var scan = MakeScan();

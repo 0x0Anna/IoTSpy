@@ -1,6 +1,7 @@
 using Cronos;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
+using IoTSpy.Core.Utilities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -27,8 +28,25 @@ public class ScheduledScanController(
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateScheduledScanDto dto, CancellationToken ct)
     {
-        var device = await devices.GetByIdAsync(dto.DeviceId, ct);
-        if (device is null) return NotFound("Device not found");
+        // Trim once, up front — CIDR validation and device-tag matching (ScheduledScanService.
+        // DeviceHasTag, which trims each device tag before comparing) both need to see the same
+        // normalized value the record ends up storing, or a value with stray whitespace would
+        // validate/store one way and then silently fail to match any device at fire time.
+        var targetCidr = dto.TargetCidr?.Trim();
+        var targetTag = dto.TargetTag?.Trim();
+
+        if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, targetCidr, targetTag))
+            return BadRequest("Exactly one of DeviceId, TargetCidr, or TargetTag must be set.");
+
+        if (dto.DeviceId.HasValue)
+        {
+            var device = await devices.GetByIdAsync(dto.DeviceId.Value, ct);
+            if (device is null) return NotFound("Device not found");
+        }
+        else if (!string.IsNullOrWhiteSpace(targetCidr) && !IoTSpy.Scanner.CidrHelper.IsValidCidr(targetCidr))
+        {
+            return BadRequest("Invalid CIDR.");
+        }
 
         // Validate cron expression
         try
@@ -43,6 +61,8 @@ public class ScheduledScanController(
         var scan = new ScheduledScan
         {
             DeviceId = dto.DeviceId,
+            TargetCidr = targetCidr,
+            TargetTag = targetTag,
             CronExpression = dto.CronExpression,
             IsEnabled = true
         };
@@ -67,6 +87,41 @@ public class ScheduledScanController(
         if (scan is null) return NotFound();
 
         if (dto.IsEnabled.HasValue) scan.IsEnabled = dto.IsEnabled.Value;
+
+        // Changing the target is atomic: whichever selector is supplied replaces all
+        // three fields, so the exactly-one-target invariant can never be left violated
+        // by a partial patch. Trimmed up front for the same reason as Create above.
+        var targetCidr = dto.TargetCidr?.Trim();
+        var targetTag = dto.TargetTag?.Trim();
+
+        if (dto.DeviceId.HasValue || !string.IsNullOrWhiteSpace(targetCidr) || !string.IsNullOrWhiteSpace(targetTag))
+        {
+            if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, targetCidr, targetTag))
+                return BadRequest("Exactly one of DeviceId, TargetCidr, or TargetTag must be set.");
+
+            if (dto.DeviceId.HasValue)
+            {
+                var device = await devices.GetByIdAsync(dto.DeviceId.Value, ct);
+                if (device is null) return NotFound("Device not found");
+                scan.DeviceId = dto.DeviceId;
+                scan.TargetCidr = null;
+                scan.TargetTag = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(targetCidr))
+            {
+                if (!IoTSpy.Scanner.CidrHelper.IsValidCidr(targetCidr))
+                    return BadRequest("Invalid CIDR.");
+                scan.DeviceId = null;
+                scan.TargetCidr = targetCidr;
+                scan.TargetTag = null;
+            }
+            else
+            {
+                scan.DeviceId = null;
+                scan.TargetCidr = null;
+                scan.TargetTag = targetTag;
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(dto.CronExpression))
         {
@@ -101,6 +156,15 @@ public class ScheduledScanController(
     }
 }
 
-public record CreateScheduledScanDto(Guid DeviceId, string CronExpression = "0 * * * *");
+public record CreateScheduledScanDto(
+    Guid? DeviceId,
+    string CronExpression = "0 * * * *",
+    string? TargetCidr = null,
+    string? TargetTag = null);
 
-public record UpdateScheduledScanDto(bool? IsEnabled = null, string? CronExpression = null);
+public record UpdateScheduledScanDto(
+    bool? IsEnabled = null,
+    string? CronExpression = null,
+    Guid? DeviceId = null,
+    string? TargetCidr = null,
+    string? TargetTag = null);

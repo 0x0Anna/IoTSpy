@@ -3,6 +3,7 @@ using System;
 using IoTSpy.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IoTSpy.Storage.Migrations
 {
     [DbContext(typeof(IoTSpyDbContext))]
-    partial class IoTSpyDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917164036_AddDeviceTags")]
+    partial class AddDeviceTags
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
@@ -1606,7 +1609,7 @@ namespace IoTSpy.Storage.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid?>("DeviceId")
+                    b.Property<Guid>("DeviceId")
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("IsEnabled")
@@ -1626,12 +1629,6 @@ namespace IoTSpy.Storage.Migrations
 
                     b.Property<long?>("NextRunAt")
                         .HasColumnType("INTEGER");
-
-                    b.Property<string>("TargetCidr")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TargetTag")
-                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
@@ -1921,7 +1918,8 @@ namespace IoTSpy.Storage.Migrations
                     b.HasOne("IoTSpy.Core.Models.Device", "Device")
                         .WithMany()
                         .HasForeignKey("DeviceId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("Device");
                 });
