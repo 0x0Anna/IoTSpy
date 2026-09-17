@@ -1,0 +1,22 @@
+{{- if .Values.grafana.dashboards.enabled }}
+# Dashboards JSON below is a packaged copy of the canonical source at
+# deploy/grafana/dashboards/ in the repo root (kept there too so it can be
+# mounted directly into Grafana's provisioning directory outside Helm, e.g.
+# docker-compose.prod.yml). Helm can only bundle files under the chart root,
+# so this directory (deploy/helm/iotspy/dashboards/) is a copy, not a symlink —
+# keep both in sync when editing either one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "iotspy.fullname" . }}-grafana-dashboards
+  labels:
+    {{- include "iotspy.labels" . | nindent 4 }}
+    {{ .Values.grafana.dashboards.label }}: {{ .Values.grafana.dashboards.labelValue | quote }}
+  annotations:
+    {{ .Values.grafana.dashboards.folderAnnotation }}: {{ .Values.grafana.dashboards.folder | quote }}
+data:
+  iotspy-traffic-proxy.json: |-
+{{ .Files.Get "dashboards/iotspy-traffic-proxy.json" | indent 4 }}
+  iotspy-operations.json: |-
+{{ .Files.Get "dashboards/iotspy-operations.json" | indent 4 }}
+{{- end }}

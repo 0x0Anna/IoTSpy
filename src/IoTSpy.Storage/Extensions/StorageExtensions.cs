@@ -28,6 +28,9 @@ public static class StorageExtensions
             {
                 opts.UseSqlite(connectionString);
             }
+
+            // DB query latency metric (iotspy_db_query_duration_seconds)
+            opts.AddInterceptors(new DbQueryMetricsInterceptor());
         });
 
         services.AddScoped<IDeviceRepository, DeviceRepository>();

@@ -37,6 +37,15 @@ public static class IoTSpyMetrics
         "Plugin decoder invocations",
         labelNames: ["protocol", "success"]);
 
+    private static readonly Counter CapturesPersisted = Metrics.CreateCounter(
+        "iotspy_captures_total",
+        "Total captures persisted, by protocol",
+        labelNames: ["protocol"]);
+
+    private static readonly Gauge SignalRConnections = Metrics.CreateGauge(
+        "iotspy_signalr_connections",
+        "Current number of active SignalR hub connections");
+
     public static void RecordProxyRequest(string protocol, string status) =>
         ProxyRequests.WithLabels(protocol, status).Inc();
 
@@ -54,4 +63,13 @@ public static class IoTSpyMetrics
 
     public static void RecordPluginDecode(string protocol, bool success) =>
         PluginDecodeAttempts.WithLabels(protocol, success ? "true" : "false").Inc();
+
+    public static void RecordCapture(string protocol) =>
+        CapturesPersisted.WithLabels(protocol).Inc();
+
+    public static void IncrementSignalRConnections() =>
+        SignalRConnections.Inc();
+
+    public static void DecrementSignalRConnections() =>
+        SignalRConnections.Dec();
 }

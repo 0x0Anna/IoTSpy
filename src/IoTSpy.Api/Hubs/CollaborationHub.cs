@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using IoTSpy.Api.Services;
 using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
@@ -26,6 +27,12 @@ public class CollaborationHub(
     private bool IsViewer => Context.User?.IsInRole(UserRole.Viewer.ToString()) ?? false;
 
     // ── Session group subscriptions ──────────────────────────────────────────────
+
+    public override Task OnConnectedAsync()
+    {
+        IoTSpyMetrics.IncrementSignalRConnections();
+        return base.OnConnectedAsync();
+    }
 
     public async Task JoinSession(string sessionId)
     {
@@ -70,6 +77,8 @@ public class CollaborationHub(
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        IoTSpyMetrics.DecrementSignalRConnections();
+
         // Clean up presence from all sessions this connection was in
         foreach (var sessionId in _presence.Keys)
         {

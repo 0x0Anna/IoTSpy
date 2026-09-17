@@ -104,6 +104,19 @@ alerting:
     integrationKey: ""
     minimumSeverity: "Critical"
 
+# ── Grafana dashboards (kube-prometheus-stack sidecar convention) ───────────
+# Ships ConfigMaps labeled `grafana_dashboard: "1"` that a Grafana sidecar
+# (grafana.sidecar.dashboards.enabled=true in kube-prometheus-stack) auto-discovers.
+# Disable if the target cluster has no Grafana / dashboard sidecar.
+grafana:
+  dashboards:
+    enabled: true
+    label: "grafana_dashboard"
+    labelValue: "1"
+    # Folder annotation consumed by the sidecar to group dashboards in Grafana's UI.
+    folderAnnotation: "grafana_folder"
+    folder: "IoTSpy"
+
 # ── Resource limits ──────────────────────────────────────────────────────────
 resources:
   requests:

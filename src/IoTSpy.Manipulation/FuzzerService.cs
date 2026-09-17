@@ -90,6 +90,9 @@ public class FuzzerService(IHttpClientFactory httpClientFactory, ILogger<FuzzerS
                     ? $"Server error: {result.ResponseStatusCode}"
                     : "Slow response (>10s)";
 
+        ManipulationMetrics.RecordFuzzerRequest(
+            result.ResponseStatusCode == 0 ? "error" : result.IsAnomaly ? "anomaly" : "ok");
+
         return result;
     }
 
