@@ -6,6 +6,7 @@ public enum InterceptionProtocol
     Https,
     Mqtt,
     MqttTls,
+    MqttSn,
     CoAP,
     Dns,
     MDns,
