@@ -16,6 +16,7 @@ public enum InterceptionProtocol
     Modbus,
     Rtsp,
     Rtp,
+    Amqp,
     TlsPassthrough,
 
     /// <summary>
