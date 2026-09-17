@@ -266,10 +266,6 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
             Auto-start proxy when server launches
           </label>
 
-          <div className="settings-hint" style={{ marginBottom: 8 }}>
-            Root CA naming (Common Name, Organization, Country, Validity) has moved to <strong>Admin → Certificates</strong>.
-          </div>
-
           <div className="settings-section-title">Help</div>
 
           <button
