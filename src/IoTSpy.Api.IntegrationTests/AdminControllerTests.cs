@@ -51,6 +51,30 @@ public class AdminControllerTests
     }
 
     [Fact]
+    public async Task Backup_Unauthenticated_Returns401()
+    {
+        var factory = new IoTSpyWebApplicationFactory();
+        await factory.InitializeDbAsync();
+        var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/admin/backup", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Restore_Unauthenticated_Returns401()
+    {
+        var factory = new IoTSpyWebApplicationFactory();
+        await factory.InitializeDbAsync();
+        var client = factory.CreateClient();
+
+        var resp = await client.PostAsync("/api/admin/restore", new MultipartFormDataContent(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task DeleteCaptures_WithNoCriteria_Returns400()
     {
         var client = await CreateAdminClientAsync();

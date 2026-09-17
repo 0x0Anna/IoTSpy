@@ -16,6 +16,7 @@ import PassiveCaptureSummary from '../components/passive/PassiveCaptureSummary'
 import DashboardLayoutsMenu from '../components/dashboard/DashboardLayoutsMenu'
 import ErrorBoundary from '../components/common/ErrorBoundary'
 import DisconnectBanner from '../components/common/DisconnectBanner'
+import AlertToastStack from '../components/common/AlertToastStack'
 import { useProxy } from '../hooks/useProxy'
 import { useCaptures } from '../hooks/useCaptures'
 import { useDevices } from '../hooks/useDevices'
@@ -141,6 +142,7 @@ export default function DashboardPage() {
       }
     >
       <DisconnectBanner status={backendStatus} />
+      <AlertToastStack />
 
       {/* View mode toggle */}
       <div className="view-toggle">

@@ -3,6 +3,7 @@ using System;
 using IoTSpy.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IoTSpy.Storage.Migrations
 {
     [DbContext(typeof(IoTSpyDbContext))]
-    partial class IoTSpyDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917070315_AddAlertOnMatch")]
+    partial class AddAlertOnMatch
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.11");

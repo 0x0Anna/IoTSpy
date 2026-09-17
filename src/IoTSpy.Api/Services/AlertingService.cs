@@ -1,4 +1,6 @@
+using IoTSpy.Api.Hubs;
 using IoTSpy.Core.Interfaces;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using System.Net.Mail;
 using System.Security.Cryptography;
@@ -13,15 +15,18 @@ public sealed class AlertingService : IAlertingService
 
     private readonly AlertingOptions _options;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IHubContext<CollaborationHub> _hub;
     private readonly ILogger<AlertingService> _logger;
 
     public AlertingService(
         IOptions<AlertingOptions> options,
         IHttpClientFactory httpClientFactory,
+        IHubContext<CollaborationHub> hub,
         ILogger<AlertingService> logger)
     {
         _options = options.Value;
         _httpClientFactory = httpClientFactory;
+        _hub = hub;
         _logger = logger;
     }
 
@@ -46,8 +51,29 @@ public sealed class AlertingService : IAlertingService
         if (_options.PagerDuty?.IntegrationKey is { Length: > 0 })
             tasks.Add(SendPagerDutyAsync(_options.PagerDuty, title, body, severity, ct));
 
+        if (_options.InApp)
+            tasks.Add(SendInAppAsync(title, body, severity, ct));
+
         if (tasks.Count > 0)
             await Task.WhenAll(tasks);
+    }
+
+    private async Task SendInAppAsync(string title, string body, AlertSeverity severity, CancellationToken ct)
+    {
+        try
+        {
+            await _hub.Clients.All.SendAsync("Alert", new
+            {
+                title,
+                body,
+                severity = severity.ToString(),
+                timestamp = DateTimeOffset.UtcNow
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send in-app alert");
+        }
     }
 
     private async Task SendWebhookAsync(string url, string title, string body, AlertSeverity severity, CancellationToken ct)

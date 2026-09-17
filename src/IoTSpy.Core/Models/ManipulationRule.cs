@@ -28,6 +28,12 @@ public class ManipulationRule
     public int? OverrideStatusCode { get; set; }
     public int? DelayMs { get; set; }           // for Delay action
 
+    /// <summary>When true, fires an alert (via IAlertingService) each time this rule matches.
+    /// Opt-in and defaults false — rules match on every proxied request, so alerting
+    /// unconditionally would flood external channels (webhook/email/Slack/PagerDuty) on
+    /// routine traffic.</summary>
+    public bool AlertOnMatch { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -15,6 +15,10 @@ public class Breakpoint
     public string? PathPattern { get; set; }
     public ManipulationPhase Phase { get; set; } = ManipulationPhase.Request;
 
+    /// <summary>When true, fires an alert (via IAlertingService) each time this breakpoint executes
+    /// successfully. Opt-in and defaults false, matching <see cref="ManipulationRule.AlertOnMatch"/>.</summary>
+    public bool AlertOnMatch { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

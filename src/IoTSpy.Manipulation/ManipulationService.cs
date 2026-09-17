@@ -17,6 +17,7 @@ public class ManipulationService(
     IApiSpecService apiSpecService,
     IManipulationRuleCache ruleCache,
     IServiceScopeFactory scopeFactory,
+    IAlertingService alerting,
     ILogger<ManipulationService> logger) : IManipulationService
 {
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runningFuzzers = new();
@@ -33,6 +34,16 @@ public class ManipulationService(
         {
             var rulesModified = await rulesEngine.ApplyRulesAsync(message, phase, rules, ct);
             if (rulesModified) modified = true;
+
+            // Re-check matches for alert-opted-in rules only (cheap: AlertOnMatch is expected
+            // rare/opt-in). Kept separate from ApplyRulesAsync's own matching pass rather than
+            // changing that method's return shape, which every existing RulesEngineTests case
+            // asserts as a plain bool.
+            foreach (var rule in rules.Where(r => r.Phase == phase && r.AlertOnMatch))
+            {
+                if (!RulesEngine.Matches(rule, message)) continue;
+                await SafeAlertAsync($"Rule '{rule.Name}' fired", $"Host: {message.Host}, Path: {message.Path}", ct);
+            }
         }
 
         // 2. Apply API spec content replacement (response phase only)
@@ -66,6 +77,9 @@ public class ManipulationService(
                     logger.LogDebug("Breakpoint {Name} ({Language}) modified message for {Host}{Path}",
                         bp.Name, bp.Language, message.Host, message.Path);
                 }
+
+                if (bp.AlertOnMatch)
+                    await SafeAlertAsync($"Breakpoint '{bp.Name}' fired", $"Host: {message.Host}, Path: {message.Path}", ct);
             }
             catch (Exception ex)
             {
@@ -77,6 +91,20 @@ public class ManipulationService(
             message.WasModified = true;
 
         return modified;
+    }
+
+    // Alert delivery failures must never break the proxy pipeline — isolate them the
+    // same way breakpoint-execution failures are already isolated above.
+    private async Task SafeAlertAsync(string title, string body, CancellationToken ct)
+    {
+        try
+        {
+            await alerting.SendAlertAsync(title, body, AlertSeverity.Warning, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to send alert for {Title}", title);
+        }
     }
 
     public async Task<ReplaySession> ReplayAsync(ReplaySession session, CancellationToken ct = default)

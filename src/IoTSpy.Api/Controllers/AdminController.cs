@@ -375,6 +375,109 @@ public class AdminController(
         });
     }
 
+    // ── Backup / restore (SQLite only) ──────────────────────────────────────
+
+    private const string SqliteProvider = "Microsoft.EntityFrameworkCore.Sqlite";
+    private static readonly byte[] SqliteHeaderMagic = "SQLite format 3\0"u8.ToArray();
+
+    [HttpGet("backup")]
+    public async Task<IActionResult> BackupDatabase(CancellationToken ct)
+    {
+        if (db.Database.ProviderName != SqliteProvider)
+            return StatusCode(501, new { error = "Backup is only supported for SQLite in this version. For Postgres, use pg_dump directly." });
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"iotspy-backup-{Guid.NewGuid():N}.db");
+        try
+        {
+            await VacuumIntoAsync(db, tempPath, ct);
+            var bytes = await System.IO.File.ReadAllBytesAsync(tempPath, ct);
+
+            await auditRepo.AddAsync(new AuditEntry
+            {
+                Username = User.Identity?.Name ?? "system",
+                Action = "DatabaseBackup",
+                EntityType = "Database",
+                Details = $"Backup created ({bytes.LongLength} bytes)",
+                IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? ""
+            }, ct);
+
+            return File(bytes, "application/octet-stream", $"iotspy-backup-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.db");
+        }
+        finally
+        {
+            if (System.IO.File.Exists(tempPath))
+                System.IO.File.Delete(tempPath);
+        }
+    }
+
+    [HttpPost("restore")]
+    [RequestSizeLimit(1024L * 1024 * 1024)] // 1 GiB — generous cap for a full DB snapshot upload
+    public async Task<IActionResult> RestoreDatabase(IFormFile file, CancellationToken ct)
+    {
+        if (db.Database.ProviderName != SqliteProvider)
+            return StatusCode(501, new { error = "Restore is only supported for SQLite in this version. For Postgres, use pg_restore directly." });
+
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "No file uploaded" });
+
+        var dbPath = db.Database.GetDbConnection().DataSource;
+        if (string.IsNullOrEmpty(dbPath))
+            return StatusCode(500, new { error = "Could not resolve the live database file path" });
+
+        var dbDirectory = Path.GetDirectoryName(dbPath);
+        var preRestoreBackupName = $"iotspy.pre-restore-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.db";
+        var preRestoreBackupPath = Path.Combine(string.IsNullOrEmpty(dbDirectory) ? "." : dbDirectory, preRestoreBackupName);
+
+        await using (var uploadStream = file.OpenReadStream())
+        {
+            var header = new byte[SqliteHeaderMagic.Length];
+            var read = await uploadStream.ReadAsync(header.AsMemory(0, header.Length), ct);
+            if (read < header.Length || !header.AsSpan().SequenceEqual(SqliteHeaderMagic))
+                return BadRequest(new { error = "Uploaded file is not a valid SQLite database" });
+
+            await VacuumIntoAsync(db, preRestoreBackupPath, ct);
+
+            // Scoped to this connection's pool only — ClearAllPools() is process-wide and
+            // would tear down every other SQLite connection in the process (e.g. concurrently
+            // running in-memory-mode test fixtures elsewhere), not just this one.
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool((Microsoft.Data.Sqlite.SqliteConnection)db.Database.GetDbConnection());
+
+            uploadStream.Seek(0, SeekOrigin.Begin);
+            await using var destination = System.IO.File.Create(dbPath);
+            await uploadStream.CopyToAsync(destination, ct);
+        }
+
+        await auditRepo.AddAsync(new AuditEntry
+        {
+            Username = User.Identity?.Name ?? "system",
+            Action = "DatabaseRestore",
+            EntityType = "Database",
+            Details = $"Database restored from upload ({file.Length} bytes). Pre-restore backup saved as {preRestoreBackupName}.",
+            IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? ""
+        }, ct);
+
+        return Ok(new { message = $"Database restored. Pre-restore backup saved as {preRestoreBackupName}." });
+    }
+
+    private static async Task VacuumIntoAsync(IoTSpyDbContext db, string destinationPath, CancellationToken ct)
+    {
+        // Server-generated path, never built from request input — no injection concern
+        // in inlining it directly into the VACUUM INTO statement.
+        var connection = db.Database.GetDbConnection();
+        var wasClosed = connection.State != System.Data.ConnectionState.Open;
+        if (wasClosed) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"VACUUM INTO '{destinationPath.Replace("'", "''")}';";
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (wasClosed) await connection.CloseAsync();
+        }
+    }
+
     [HttpGet("retention")]
     public IActionResult GetRetentionSettings()
     {
