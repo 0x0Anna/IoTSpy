@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 50 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #45, #46, #47, #49, #50, #55, #57 |
+| ✅ Completed | 51 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47, #49, #50, #55, #57 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 3 | #33, #44, #48 |
+| 🟨 Medium remaining | 2 | #33, #48 |
 | 🟩 Low remaining | 7 | #51–#54, #56, #58, #59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43), **#89/#90/#91/#92** (protocol coverage #44 — one PR per protocol: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT detection).
 
 ---
 
@@ -36,10 +36,6 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 ### Incomplete shipped features
 
 **33. Report covers scan findings only** — `ReportService.cs:50` only loads `ScanJob` + `ScanFinding`. No captures, TLS metadata, annotations, MQTT/DNS messages. Not a usable pen-test deliverable. Redesign report sections + template system.
-
-### Protocol coverage gaps
-
-**44. AMQP 1.0** (Azure IoT Hub, ActiveMQ — high IoT relevance), **RTSP/RTP** (IP cameras — frequent IoT finding), **MQTT-SN** (constrained-device UDP variant), **DoH/DoT detection** (devices increasingly evade DNS inspection). All on roadmap, none shipped. Slot: `IoTSpy.Protocols`. One PR per protocol.
 
 ### Trust & safety
 
@@ -155,21 +151,30 @@ Each entry includes the closing PR. Use `gh pr view <num>` for the full diff and
 - **#42 — SQLite backup/restore** [branch: feature/har-import-backup-alerts] — `GET /api/admin/backup` (`VACUUM INTO` a temp file, streamed back, then deleted) and `POST /api/admin/restore` (SQLite magic-header validation, a pre-restore safety-net backup of the live file, `SqliteConnection.ClearPool` scoped to just the live connection — **not** `ClearAllPools()`, which is process-wide and would tear down unrelated concurrent SQLite connections elsewhere in the process — then an atomic file overwrite). Postgres returns 501 with guidance to use `pg_dump`/`pg_restore` directly; shelling out to those was deliberately not built (no existing subprocess precedent in this codebase, version-compatibility risk). 5 new `AdminBackupRestoreTests` against a real on-disk SQLite file (the standard in-memory-mode test harness can't exercise a real file-swap).
 - **#43 — Retention runtime API + UI: already done, doc was stale** [branch: feature/har-import-backup-alerts] — `GET/PUT /api/admin/retention` and a full `DatabaseTab.tsx` UI already existed end-to-end; no code changes, just corrected the doc.
 
+### Protocol coverage (4 of 4) ✅
+
+Shipped as four independent PRs, one per protocol, per the item's own "Slot: `IoTSpy.Protocols`. One PR per protocol" scoping — all decoder-only (no new live-intercepting proxy/listener for any of the four; `docs/PHASES-ARCHIVED.md`'s Phase 17 archival rationale is about USB-hardware-dependent protocols and doesn't apply here, since all four run over plain TCP/UDP/TLS and are decodable from already-captured bytes):
+
+- **#44 (RTSP/RTP)** [PR #89] — `RtspDecoder` (RFC 2326 request/status line + header + body parsing via the existing `HttpHeaderParser`, all standard methods, `CSeq`/`Session`, a stateless per-message `IsUnauthenticatedStreamSignal`), `SdpInfo`/`SdpMediaDescription` (lightweight RFC 4566 parser: session name, connection address, media lines), `RtpDecoder` (RFC 3550 §5.1 fixed header + CSRC list + extension skip, transparently unwraps RTSP's `$`-prefixed interleaved framing). Added `Rtsp`/`Rtp` to `InterceptionProtocol`. 23 new tests.
+- **#44 (AMQP 1.0)** [PR #90] — `AmqpDecoder` decodes the protocol-header handshake and all 9 performative types by descriptor code (open/begin/attach/flow/transfer/disposition/detach/end/close), with headline-field extraction for `open` (container-id, hostname) and `transfer` (handle, delivery-id) via a generic `TrySkipValue` type-width walker that gracefully skips encodings it doesn't specifically decode — depth over completeness, consistent with how other decoders in this codebase vary in depth. Added `Amqp` to `InterceptionProtocol`. 13 new tests.
+- **#44 (MQTT-SN)** [PR #91] — `MqttSnDecoder` covers the core OASIS MQTT-SN v1.2 message set (ADVERTISE, SEARCHGW, GWINFO, CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT), both short-form and extended-length (>255-byte) framing, following `MqttDecoder`'s existing structure closely. Added `MqttSn` to `InterceptionProtocol`. 18 new tests.
+- **#44 (DoH/DoT detection)** [PR #92] — shaped differently from the other three (detection layered onto existing decode paths, not a new `IProtocolDecoder<T>`, matching the `WebSocketDecoder.DetectSubProtocol`/`TlsClientHelloParser` precedent). `DohDetector.TryDetect` recognizes RFC 8484 framing (`application/dns-message` content-type, or `/dns-query?dns=`) and genuinely decodes the embedded DNS message via the existing `DnsDecoder` — not just a boolean flag. `DotDetector.IsLikelyDot` flags DoT heuristically (port 853, or SNI matching a known-resolver allowlist) since encrypted TLS payload gives no further visibility. Added `DohDetected` to `InterceptionProtocol`. 16 new tests.
+
+All four branched off the same `main` commit in parallel isolated worktrees; PR #90 needed a post-review rebase to resolve a trivial conflict on `InterceptionProtocol.cs` (each PR added its own enum value to the same list) after #89/#91/#92 merged first.
+
 ---
 
 ## Recommended next PRs
 
-Updated after feature/har-import-backup-alerts landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
+Updated after #89/#90/#91/#92 (protocol coverage) landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
 
 1. **Report redesign** — #33. `ReportService` only covers scan findings today; not a usable pen-test deliverable without captures, TLS metadata, annotations, and protocol messages.
 
 2. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
 
-3. **Protocol coverage** — #44. One PR per protocol; AMQP 1.0 and RTSP/RTP first (highest IoT relevance). Slot: `IoTSpy.Protocols`.
+3. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
 
-4. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
-
-5. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
+4. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
 
 Each item above is sized to fit a focused PR. Avoid bundling across categories — the cleaner the diff, the easier the review.
 

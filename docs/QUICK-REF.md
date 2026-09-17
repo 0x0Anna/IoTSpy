@@ -98,13 +98,12 @@ git checkout -b feature/short-description
 # or
 git checkout -b fix/issue-number
 
-# Stage & commit
-git add .
+# Stage & commit — stage specific files, not `git add .`/`-A`, to avoid sweeping in
+# unrelated or sensitive files
+git add <specific-files>
 git commit -m "Brief summary
 
-Detailed explanation if needed.
-
-https://claude.ai/code/session_01T6WuGUXCVN5FiXGTruvFx5"
+Detailed explanation if needed."
 
 # Push
 git push -u origin feature/short-description
@@ -253,7 +252,7 @@ curl http://localhost:5000/api/proxy/status \
 
 # I'm debugging a problem
 → See docs/AGENT-NOTES.md ("Common Debugging Scenarios")
-→ See docs/TROUBLESHOOTING.md (when created)
+→ See docs/TROUBLESHOOTING.md
 
 # I need to understand the architecture
 → See docs/DESIGN-DECISIONS.md
@@ -264,8 +263,9 @@ curl http://localhost:5000/api/proxy/status \
 → See docs/PHASES-COMPLETED.md (detailed phase list)
 
 # What should I work on next?
+→ See docs/CODE-REVIEW-FINDINGS.md (live backlog board, "Recommended next PRs")
 → See docs/GAPS.md (known issues & tech debt)
-→ See docs/PHASES-ROADMAP.md (Phase 21+)
+→ See docs/PHASES-ROADMAP.md (larger future enhancement areas)
 ```
 
 ---

@@ -18,11 +18,7 @@ See [PHASES-COMPLETED.md](PHASES-COMPLETED.md) for all completed work including 
 - **Behavioral inference / privacy-leakage module** — Infer occupant activity/routines from packet metadata alone (below TLS); see [PLAN-BEHAVIORAL-INFERENCE.md](PLAN-BEHAVIORAL-INFERENCE.md) for the full design
 
 ### Protocol Decoder Depth
-- **AMQP 1.0 decoder** — Message broker protocol increasingly used in IoT (Phase 17.1)
-- **RTSP/RTP for IP cameras** — Detect unauthenticated camera streams (Phase 17.2)
-- **DNS DNSSEC / DoH / DoT** — Detect encrypted DNS, validate DNSSEC chains
-- **CoAP resource discovery** — `.well-known/core` parsing, Block-wise transfer, Observe option
-- **gRPC `.proto` schema mapping** — Upload `.proto` files to resolve field names in captured gRPC messages
+- **DNS DNSSEC validation** — Validate DNSSEC chains (DoH/DoT *detection* shipped — see `docs/CODE-REVIEW-FINDINGS.md` #44 / `DohDetector`+`DotDetector`; full DNSSEC chain validation is still open)
 
 ### Longer-Horizon
 - **Offline mode** — Cache captures, rules, and playback without network connectivity

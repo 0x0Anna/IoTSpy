@@ -49,12 +49,12 @@ docker compose up -d
 ```
 IoTSpy.Core           — Domain models, interfaces, enums (no infrastructure deps)
 IoTSpy.Proxy          — TLS MITM, TLS passthrough/SSL stripping, WebSocket/MQTT/CoAP proxies
-IoTSpy.Protocols      — MQTT, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, telemetry decoders
+IoTSpy.Protocols      — MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, telemetry decoders
 IoTSpy.Scanner        — Port scan, fingerprinting, CVE lookup, packet capture
 IoTSpy.Manipulation   — Rules engine, scripts, replay, fuzzer, AI mock, API spec, content replacement
 IoTSpy.Storage        — EF Core DbContext + repositories (SQLite/Postgres)
-IoTSpy.Api            — ASP.NET Core host (17 controllers, 3 SignalR hubs)
-IoTSpy.*.Tests        — Unit + integration tests (517 total)
+IoTSpy.Api            — ASP.NET Core host (22 controllers, 3 SignalR hubs)
+IoTSpy.*.Tests        — Unit + integration tests (1099 executed)
 frontend/             — Vite 6 + React 19 + TypeScript dashboard
 docs/                 — ARCHITECTURE.md, PLAN-INDEX.md, PHASES-*.md, GAPS.md, etc.
 ```
@@ -66,7 +66,7 @@ docs/                 — ARCHITECTURE.md, PLAN-INDEX.md, PHASES-*.md, GAPS.md, 
 ### Multi-user RBAC
 - `User` model with `UserRole` enum (Admin/Operator/Viewer)
 - JWT claims include `NameIdentifier` (user ID) + `Role`
-- Admin-only endpoints guarded by `[Authorize(Roles = "Admin")]`
+- Admin-only endpoints guarded by `[Authorize(Roles = "admin")]` (lowercase — a case-mismatch here silently 403'd everyone; see `docs/CODE-REVIEW-FINDINGS.md` #2)
 - Backward-compatible with legacy single-user mode (falls back to `ProxySettings.PasswordHash`)
 
 ### Audit log
@@ -99,7 +99,7 @@ docs/                 — ARCHITECTURE.md, PLAN-INDEX.md, PHASES-*.md, GAPS.md, 
 
 ## Testing Before Commit
 
-**CRITICAL:** All 517 backend tests must pass before committing.
+**CRITICAL:** All backend tests must pass before committing (1099 executed as of 2026-09-17; re-check via the commands in `CLAUDE.md` rather than trusting this number, it drifts fast).
 
 ```bash
 # Full test suite
@@ -286,7 +286,7 @@ Changes to `.tsx`/`.ts`/`.css` files hot-reload in browser.
 2. **Always use scoped repos in controllers** — Never pass a repo to a hosted service without creating a new scope
 3. **Test migrations on SQLite AND Postgres locally** if you can — Some SQL dialects differ
 4. **SignalR must use `JsonStringEnumConverter`** on both `AddControllers()` and `AddSignalR()` — Missing one causes numeric enum serialization
-5. **Audit log is immutable by design** — Don't delete audit entries; log retention policies go in Phase 21+
+5. **Audit log is immutable by design** — write-once enforced at the DB level (`AuditWriteOnceTrigger` migration); deletions still allowed via `DataRetentionService`'s configurable retention policies (`GET/PUT /api/admin/retention` + DatabaseTab UI, already shipped)
 6. **Rule priority matters** — Rules execute in ascending priority; test rule interactions
 7. **Backend decompression happens pre-storage** — Captured body is decompressed; original compressed bytes forwarded to client
 8. **Packet capture uses ring buffer** — 10k packet limit; old packets drop on buffer overflow (not a database transaction)
@@ -298,8 +298,10 @@ Changes to `.tsx`/`.ts`/`.css` files hot-reload in browser.
 - **README.md** — Quick start, feature list, API reference
 - **docs/ARCHITECTURE.md** — Technical architecture, project structure, data flow
 - **docs/PLAN-INDEX.md** — High-level overview and navigation hub
-- **docs/PHASES-COMPLETED.md** — All implemented phases (1-15, 18-20)
-- **docs/PHASES-ROADMAP.md** — Deprioritized phases (16-17), future work (Phase 21+)
+- **docs/PHASES-COMPLETED.md** — All implemented phases (1-16, 18-22)
+- **docs/PHASES-ARCHIVED.md** — Formally deprioritized phases (17 — non-IP/hardware-dependent protocols)
+- **docs/PHASES-ROADMAP.md** — Future enhancement areas (no numbered phases remaining)
+- **docs/CODE-REVIEW-FINDINGS.md** — Live backlog board (completed/remaining items, recommended next PRs) — check this first for "what's left"
 - **docs/DESIGN-DECISIONS.md** — Architecture decisions, naming, implementation notes
 - **docs/GAPS.md** — Known issues, technical debt, testing gaps
 - **docs/AGENT-NOTES.md** — This file; Claude Code session setup and procedures
@@ -309,7 +311,7 @@ Changes to `.tsx`/`.ts`/`.css` files hot-reload in browser.
 ## Need Help?
 
 1. **Architecture questions** — See `docs/ARCHITECTURE.md` and `docs/DESIGN-DECISIONS.md`
-2. **What to build next** — Check `docs/PHASES-ROADMAP.md` (Phase 21 recommended)
+2. **What to build next** — Check `docs/CODE-REVIEW-FINDINGS.md`'s "Recommended next PRs" section (the live backlog board); `docs/PHASES-ROADMAP.md` for larger unnumbered future enhancement areas
 3. **Known issues** — See `docs/GAPS.md` for open bugs and technical debt
 4. **Phase details** — `docs/PHASES-COMPLETED.md` has full descriptions with test counts
 5. **Command reference** — Check CLAUDE.md in the repo root
