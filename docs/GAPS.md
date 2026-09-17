@@ -11,7 +11,6 @@ This document tracks remaining gaps, known limitations, and technical debt. Item
 | No LDAP / SAML SSO | Enterprise single sign-on not implemented | Low | Open | Deprioritized in Phase 16.5; deliberately deferred as [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) #59 (SSO/OIDC) — see that doc's rationale before picking this up |
 | No distributed / multi-node mode | Single-instance proxy per deployment; horizontal scaling requires Redis backplane | Low | Open | Deprioritized in Phase 16.8; see Design Assumptions |
 | No Bluetooth/Zigbee/Z-Wave | IoT protocols beyond IP-based networking are not supported | Low | Open | See Phase 17 for future work |
-| Dashboard layout persistence | Per-user saved layout/filter presets with full CRUD; DB model, repo, and API all implemented; zero frontend exposure | Low | Open | Backend: `GET/POST/PUT/DELETE /api/dashboard/layouts` |
 
 ---
 
@@ -120,6 +119,9 @@ See [AGENT-NOTES.md](AGENT-NOTES.md) for session setup and testing instructions.
 ---
 
 ## Resolved Items
+
+### Dashboard layout persistence test-backfill (2026-09-17)
+- ~~Dashboard layout persistence — zero frontend exposure~~ — Stale entry: the frontend was already fully wired (`frontend/src/api/dashboardLayouts.ts` full CRUD client, `frontend/src/hooks/useDashboardLayouts.ts` TanStack Query hook, `frontend/src/components/dashboard/DashboardLayoutsMenu.tsx` list/apply/save/set-default/delete UI, wired into `DashboardPage`, with a passing `DashboardLayoutsMenu.test.tsx`). What was actually missing was backend test coverage: added `DashboardControllerTests.cs` (ownership scoping on list, `UserId` set from the authenticated user on create, 404/403 on update and delete for missing/foreign layouts, partial-field update semantics) and `DashboardLayoutRepositoryTests.cs` (`GetByUserAsync` per-user isolation, `UpdateAsync` bumps `UpdatedAt`, CRUD round-trip). Also fixed a duplicate `DashboardLayout` interface in `frontend/src/types/api.ts` (one had `createdAt`/`updatedAt`, one didn't) and removed the unused `DashboardLayoutState` type.
 
 ### Gaps Batch 6 (2026-05-09)
 - ~~gRPC `.proto` file upload / field name resolution~~ — `ProtoParser` (regex-based, no external dep) extracts per-message and flat field maps; `ProtoSchema` model + `IProtoSchemaRepository`; `ProtoSchemasController` at `GET/POST/DELETE /api/grpc/schemas`; `GrpcDecoder.DecodeAsync` overload accepts `IReadOnlyDictionary<int, string>` and populates `ProtobufField.FieldName`; EF migration `AddProtoSchemas`; 14 new tests (7 `GrpcDecoderTests` + 7 `ProtoParserTests`)
