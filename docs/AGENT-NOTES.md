@@ -54,7 +54,7 @@ IoTSpy.Scanner        — Port scan, fingerprinting, CVE lookup, packet capture
 IoTSpy.Manipulation   — Rules engine, scripts, replay, fuzzer, AI mock, API spec, content replacement
 IoTSpy.Storage        — EF Core DbContext + repositories (SQLite/Postgres)
 IoTSpy.Api            — ASP.NET Core host (22 controllers, 3 SignalR hubs)
-IoTSpy.*.Tests        — Unit + integration tests (1099 executed)
+IoTSpy.*.Tests        — Unit + integration tests (1183 executed)
 frontend/             — Vite 6 + React 19 + TypeScript dashboard
 docs/                 — ARCHITECTURE.md, PLAN-INDEX.md, PHASES-*.md, GAPS.md, etc.
 ```
@@ -99,7 +99,7 @@ docs/                 — ARCHITECTURE.md, PLAN-INDEX.md, PHASES-*.md, GAPS.md, 
 
 ## Testing Before Commit
 
-**CRITICAL:** All backend tests must pass before committing (1099 executed as of 2026-09-17; re-check via the commands in `CLAUDE.md` rather than trusting this number, it drifts fast).
+**CRITICAL:** All backend tests must pass before committing (1183 executed as of 2026-09-17; re-check via the commands in `CLAUDE.md` rather than trusting this number, it drifts fast).
 
 ```bash
 # Full test suite
@@ -301,7 +301,8 @@ Changes to `.tsx`/`.ts`/`.css` files hot-reload in browser.
 - **docs/PHASES-COMPLETED.md** — All implemented phases (1-16, 18-22)
 - **docs/PHASES-ARCHIVED.md** — Formally deprioritized phases (17 — non-IP/hardware-dependent protocols)
 - **docs/PHASES-ROADMAP.md** — Future enhancement areas (no numbered phases remaining)
-- **docs/CODE-REVIEW-FINDINGS.md** — Live backlog board (completed/remaining items, recommended next PRs) — check this first for "what's left"
+- **docs/CODE-REVIEW-FINDINGS.md** — Closed/archived: the 2026-05-09 multi-angle review, every item completed or deliberately deferred (with rationale) as of 2026-09-17. Historical record, not a board to pick work from.
+- **docs/RUNBOOK.md** — On-call incident response for production deployments (proxy outages, SQLite corruption, JWT rotation, cert issues, retention/disk growth, SignalR degradation, container rollback)
 - **docs/DESIGN-DECISIONS.md** — Architecture decisions, naming, implementation notes
 - **docs/GAPS.md** — Known issues, technical debt, testing gaps
 - **docs/AGENT-NOTES.md** — This file; Claude Code session setup and procedures
@@ -311,7 +312,7 @@ Changes to `.tsx`/`.ts`/`.css` files hot-reload in browser.
 ## Need Help?
 
 1. **Architecture questions** — See `docs/ARCHITECTURE.md` and `docs/DESIGN-DECISIONS.md`
-2. **What to build next** — Check `docs/CODE-REVIEW-FINDINGS.md`'s "Recommended next PRs" section (the live backlog board); `docs/PHASES-ROADMAP.md` for larger unnumbered future enhancement areas
+2. **What to build next** — `docs/CODE-REVIEW-FINDINGS.md` is fully closed (see its three deferred items — #48, #56, #59 — if picking one of those back up); otherwise check `docs/GAPS.md` and `docs/PHASES-ROADMAP.md` for open work and larger unnumbered future enhancement areas
 3. **Known issues** — See `docs/GAPS.md` for open bugs and technical debt
 4. **Phase details** — `docs/PHASES-COMPLETED.md` has full descriptions with test counts
 5. **Command reference** — Check CLAUDE.md in the repo root

@@ -55,7 +55,7 @@ src/
 frontend/                      Vite + React + TypeScript dashboard
 docs/
   ARCHITECTURE.md              Full architecture spec
-  PLAN-INDEX.md                Navigation hub; links to PHASES-*.md and CODE-REVIEW-FINDINGS.md (the live backlog board)
+  PLAN-INDEX.md                Navigation hub; links to PHASES-*.md and CODE-REVIEW-FINDINGS.md (closed/archived — all items resolved)
 ```
 
 ### Dependency graph

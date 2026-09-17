@@ -263,7 +263,7 @@ curl http://localhost:5000/api/proxy/status \
 → See docs/PHASES-COMPLETED.md (detailed phase list)
 
 # What should I work on next?
-→ See docs/CODE-REVIEW-FINDINGS.md (live backlog board, "Recommended next PRs")
+→ See docs/CODE-REVIEW-FINDINGS.md — closed/archived, but its three deliberately-deferred items (#48, #56, #59) are candidates if picking one back up
 → See docs/GAPS.md (known issues & tech debt)
 → See docs/PHASES-ROADMAP.md (larger future enhancement areas)
 ```
