@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 40 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #45, #46, #47, #49, #50 |
+| ✅ Completed | 43 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #39, #45, #46, #47, #49, #50, #55 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 12 | #33, #36–#44, #48 |
-| 🟩 Low remaining | 9 | #51–#59 |
+| 🟨 Medium remaining | 9 | #33, #37, #38, #40–#44, #48 |
+| 🟩 Low remaining | 8 | #51–#54, #56–#59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55).
 
 ---
 
@@ -39,13 +39,9 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 
 ### Missing user stories (high-value)
 
-**36. Capture-to-curl** — table-stakes in Proxyman / mitmproxy; not present. Add `GET /api/captures/{id}/curl` + UI button on `RequestTab` / `ResponseTab`.
-
 **37. HAR import** — export exists but no `POST /api/captures/import/har`. Developers can't seed IoTSpy from a browser-captured HAR.
 
 **38. Replay against override base URL** — `StartReplayDto.Host` exists but UX/coverage unclear. Verify end-to-end and surface in the UI.
-
-**39. Body full-text search on captures** — `?q=` searches URL/method/host, `?headerQ=` searches headers, no body content search. Wire SQLite FTS5 (already available) on `RequestBody` / `ResponseBody` columns.
 
 **40. In-app SignalR notification when a rule/breakpoint fires** — `AlertingService` does external webhooks/email/Slack only. Add an in-app channel via the existing collaboration hub.
 
@@ -74,8 +70,6 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 **53. No bundled Grafana dashboards** despite Helm chart shipping.
 
 **54. No on-call runbook in `docs/`** — what to do when the proxy stops intercepting, how to recover from corrupt SQLite, how to rotate JWT secret without logging everyone out.
-
-**55. Capture diff endpoint absent** (`GET /api/captures/diff?a=&b=`).
 
 **56. Project/workspace concept absent** — no aggregate over Device + Session + ScanJob to namespace per-engagement artifacts.
 
@@ -157,14 +151,19 @@ Each entry includes the closing PR. Use `gh pr view <num>` for the full diff and
 - **#34 — `ProtoParser.FromJson`/`ToJson` fragile hand-rolled parser** [branch: feature/config-export-import-polish] — both replaced with `System.Text.Json.JsonSerializer`; on-disk `{"1":"name"}` shape unchanged since `Dictionary<int,string>` serializes int keys as JSON string keys natively. Fixes incorrect parsing of field names containing `,` or `:`. 2 new `ProtoParserTests`.
 - **#35 — `AdminController.GetStats` magic-number storage estimates** [branch: feature/config-export-import-polish] — replaced the fabricated `count * 2048` / `count * 512` per-entity numbers with one real `database.estimatedSizeBytes` (SQLite: `PRAGMA page_count * page_size`; Postgres: `pg_database_size(current_database())`), read via raw ADO (`SqlQueryRaw<T>` can't compose over non-composable `PRAGMA`/PRAGMA-like statements).
 
+### Researcher persona (3 of 3) ✅
+
+- **#36 — Capture-to-curl** [branch: feature/capture-curl-diff] — `GET /api/captures/{id}/curl` reconstructs a runnable curl command (`-X`, `-H` per header via the existing `HttpHeaderParser`, `--data-raw` for a non-empty body, default-port suppression, POSIX shell-quoting). Backend only — no UI button yet (tracked separately if wanted).
+- **#39 — Body full-text search on captures: corrected, not missing** [branch: feature/capture-curl-diff] — investigation found `?q=` already searches `RequestBody`/`ResponseBody` via `CaptureFilter.BodySearch` (`CaptureRepository.ApplyFilter`); the original item's claim that `?q=` is host/URL-only and body search doesn't exist was stale. Real SQLite FTS5 was evaluated and intentionally **not** built: zero existing FTS5 infrastructure in the repo, and adding it would mean SQLite-only sync triggers plus a separate Postgres tsvector/pg_trgm path — cross-provider complexity ruled out to avoid breaking Postgres parity. Landed instead: a `MinSearchTermLength` (3-char) guard on `?q=`/`?headerQ=` in `CapturesController.List`, since a 1-2 character `LIKE '%x%'` is a near-full-table scan regardless of provider (a leading wildcard defeats a B-tree index on both SQLite and Postgres). New repository test covers `BodySearch` (previously untested despite already working).
+- **#55 — Capture diff endpoint** [branch: feature/capture-curl-diff] — `GET /api/captures/diff?a=&b=` returns a structural diff (method/URL/status-changed flags, per-header add/remove/change entries via `HttpHeaderParser`, request/response body-equality flags) with no external diff library — a future UI renders it however it likes. 400 on `a == b`, 404 naming whichever capture(s) are missing.
+
 ---
 
 ## Recommended next PRs
 
-Updated after feature/config-export-import-polish landed. All Critical, High, and the "incomplete-feature polish" Medium items are now resolved. Remaining PRs in priority order:
+Updated after feature/capture-curl-diff landed. All Critical, High, and the "incomplete-feature polish" + "Researcher persona" Medium/Low items are now resolved. Remaining PRs in priority order:
 
 1. **User-story PRs (medium, high-value)** — pick one per persona-PR:
-   - Researcher: #36 (capture-to-curl `GET /api/captures/{id}/curl`), #39 (body FTS5 search on `RequestBody`/`ResponseBody`), #55 (capture diff endpoint)
    - Pen-tester: #38 (replay base-URL override end-to-end), #57 (CVSS override `PATCH /api/scanner/findings/{id}`), #56 (project/workspace concept)
    - Developer: #37 (`POST /api/captures/import/har`)
    - Admin: #41 (audit `UsersTab.tsx` create/edit wiring), #42 (backup/restore endpoints), #43 (`GET/PUT /api/admin/retention` + DatabaseTab UI), #40 (in-app SignalR alerts via collaboration hub)

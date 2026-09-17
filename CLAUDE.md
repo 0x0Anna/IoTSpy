@@ -79,15 +79,21 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 917 backend `[Fact]`/`[Theory]` attributes across 9 test projects (989 executed test cases); 102 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
-- 22 REST controllers, 208 endpoints
+- 927 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1000 executed test cases); 102 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 22 REST controllers, 210 endpoints
 - 27 EF Core migrations up through `AddScheduledScanLastRunStatus`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### feature/config-export-import-polish (latest)
+### feature/capture-curl-diff (latest)
+`docs/CODE-REVIEW-FINDINGS.md` Researcher-persona items #36, #39, #55:
+- Capture-to-curl (#36): `GET /api/captures/{id}/curl` reconstructs a runnable curl command (method, headers via `HttpHeaderParser`, `--data-raw` body, default-port suppression, POSIX shell-quoting)
+- Body search correction (#39): `?q=` on `GET /api/captures` already searched `RequestBody`/`ResponseBody` (the docs describing it as URL/host-only were stale, now fixed) — real FTS5 was evaluated and intentionally not built (SQLite-only, would need sync triggers plus a separate Postgres path); added a 3-char `MinSearchTermLength` guard on `?q=`/`?headerQ=` instead, since a 1-2 char `LIKE '%x%'` scans the whole table on any provider
+- Capture diff (#55): `GET /api/captures/diff?a=&b=` returns a structural diff (method/URL/status-changed flags, per-header add/remove/change list, body-equality flags), 400 on `a == b`, 404 naming missing capture(s)
+
+### feature/config-export-import-polish (previous)
 `docs/CODE-REVIEW-FINDINGS.md` items #29, #30, #31, #32, #34, #35 (the "incomplete-feature polish" PR):
 - HAR export headers (#29): `IoTSpy.Core.Utilities.HttpHeaderParser` parses the raw `Name: Value\r\n...` header text actually stored in `CapturedRequest.RequestHeaders`/`ResponseHeaders` (despite their "JSON-serialized" doc comment); `CapturesController.BuildHar` and `ParseContentType` both now use it instead of the previous silently-broken `JsonDocument.Parse` assumption
 - Config export/import round-trip (#30, #31): `AdminController.ExportConfig` now includes standalone `ContentReplacementRule`s and `ProtoSchema`s; new `POST /api/admin/import/config` imports the parts of the bundle `/api/manipulation/import` doesn't already own (scheduled scans, fuzzer jobs, OpenRTB policies, standalone content rules, proto schemas), regenerating IDs on every entity

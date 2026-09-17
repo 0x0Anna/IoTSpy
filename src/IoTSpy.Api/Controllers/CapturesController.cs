@@ -14,6 +14,12 @@ namespace IoTSpy.Api.Controllers;
 [Route("api/captures")]
 public class CapturesController(ICaptureRepository captures) : ControllerBase
 {
+    // A 1-2 character LIKE '%x%' term is a near-full-table scan on every row
+    // regardless of DB provider (a leading wildcard defeats a B-tree index on
+    // both SQLite and Postgres), so reject short search terms rather than let
+    // them silently degrade query performance.
+    private const int MinSearchTermLength = 3;
+
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] Guid? deviceId,
@@ -28,6 +34,9 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
     {
+        if (q is { Length: > 0 and < MinSearchTermLength } || headerQ is { Length: > 0 and < MinSearchTermLength })
+            return BadRequest(new { error = $"Search terms must be at least {MinSearchTermLength} characters" });
+
         pageSize = Math.Clamp(pageSize, 1, 200);
         var filter = new CaptureFilter(deviceId, host, method, statusCode, from, to, q, clientIp, headerQ);
         var rawItems = await captures.GetPagedAsync(filter, page, pageSize);
@@ -191,6 +200,98 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
         }
     };
 
+    // ── Capture-to-curl ───────────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/curl")]
+    public async Task<IActionResult> ExportAsCurl(Guid id, CancellationToken ct)
+    {
+        var capture = await captures.GetByIdAsync(id, ct);
+        if (capture is null) return NotFound();
+
+        return Ok(new { curl = BuildCurlCommand(capture) });
+    }
+
+    private static string BuildCurlCommand(CapturedRequest r)
+    {
+        var parts = new List<string> { $"curl -X {r.Method}", $"'{BuildCurlUrl(r)}'" };
+
+        foreach (var (name, value) in HttpHeaderParser.ParseHeaderLines(r.RequestHeaders))
+            parts.Add($"-H '{ShellQuote(name)}: {ShellQuote(value)}'");
+
+        if (!string.IsNullOrEmpty(r.RequestBody))
+            parts.Add($"--data-raw '{ShellQuote(r.RequestBody)}'");
+
+        return string.Join(" \\\n  ", parts);
+    }
+
+    private static string BuildCurlUrl(CapturedRequest r)
+    {
+        var isDefaultPort = r.Port <= 0
+            || (r.Port == 80 && r.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase))
+            || (r.Port == 443 && r.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase));
+        var portSuffix = isDefaultPort ? "" : $":{r.Port}";
+        return $"{r.Scheme}://{r.Host}{portSuffix}{r.Path}{r.Query}";
+    }
+
+    private static string ShellQuote(string value) => value.Replace("'", "'\\''");
+
+    // ── Capture diff ──────────────────────────────────────────────────────────
+
+    [HttpGet("diff")]
+    public async Task<IActionResult> Diff([FromQuery] Guid a, [FromQuery] Guid b, CancellationToken ct)
+    {
+        if (a == b)
+            return BadRequest(new { error = "Cannot diff a capture against itself" });
+
+        var captureA = await captures.GetByIdAsync(a, ct);
+        var captureB = await captures.GetByIdAsync(b, ct);
+
+        var missing = new List<Guid>();
+        if (captureA is null) missing.Add(a);
+        if (captureB is null) missing.Add(b);
+        if (missing.Count > 0)
+            return NotFound(new { error = "Capture not found", missing });
+
+        return Ok(BuildDiff(captureA!, captureB!));
+    }
+
+    private static CaptureDiffResult BuildDiff(CapturedRequest a, CapturedRequest b)
+    {
+        var urlA = BuildCurlUrl(a);
+        var urlB = BuildCurlUrl(b);
+
+        return new CaptureDiffResult(
+            new CaptureDiffSummary(a.Id, a.Method, urlA, a.StatusCode, a.Timestamp),
+            new CaptureDiffSummary(b.Id, b.Method, urlB, b.StatusCode, b.Timestamp),
+            MethodChanged: a.Method != b.Method,
+            UrlChanged: urlA != urlB,
+            StatusCodeChanged: a.StatusCode != b.StatusCode,
+            RequestHeaderDiff: DiffHeaders(a.RequestHeaders, b.RequestHeaders),
+            ResponseHeaderDiff: DiffHeaders(a.ResponseHeaders, b.ResponseHeaders),
+            RequestBodyEqual: a.RequestBody == b.RequestBody,
+            ResponseBodyEqual: a.ResponseBody == b.ResponseBody);
+    }
+
+    private static List<HeaderDiffEntry> DiffHeaders(string? headersA, string? headersB)
+    {
+        // Last value wins on a duplicate header name — same tolerance HttpHeaderParser already has.
+        var a = HttpHeaderParser.ParseHeaderLines(headersA)
+            .ToDictionary(h => h.Name, h => h.Value, StringComparer.OrdinalIgnoreCase);
+        var b = HttpHeaderParser.ParseHeaderLines(headersB)
+            .ToDictionary(h => h.Name, h => h.Value, StringComparer.OrdinalIgnoreCase);
+
+        var names = a.Keys.Union(b.Keys, StringComparer.OrdinalIgnoreCase);
+        var diff = new List<HeaderDiffEntry>();
+        foreach (var name in names)
+        {
+            var hasA = a.TryGetValue(name, out var valueA);
+            var hasB = b.TryGetValue(name, out var valueB);
+            if (hasA && hasB && valueA == valueB) continue; // unchanged — omit to keep the payload small
+            diff.Add(new HeaderDiffEntry(name, hasA ? valueA : null, hasB ? valueB : null));
+        }
+        return diff;
+    }
+
     // ── Streaming asset export (Phase 23.1) ──────────────────────────────────
 
     [HttpPost("{id:guid}/export-as-asset")]
@@ -262,6 +363,22 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
     // ── DTOs ──────────────────────────────────────────────────────────────────
 
     public record ExportCaptureAsAssetResult(string FileName, string FilePath, string ContentType, long SizeBytes);
+
+    public record CaptureDiffSummary(Guid Id, string Method, string Url, int StatusCode, DateTimeOffset Timestamp);
+
+    /// <summary>A header present with a different value on each side, or present on only one side (the other value is null).</summary>
+    public record HeaderDiffEntry(string Name, string? ValueA, string? ValueB);
+
+    public record CaptureDiffResult(
+        CaptureDiffSummary A,
+        CaptureDiffSummary B,
+        bool MethodChanged,
+        bool UrlChanged,
+        bool StatusCodeChanged,
+        List<HeaderDiffEntry> RequestHeaderDiff,
+        List<HeaderDiffEntry> ResponseHeaderDiff,
+        bool RequestBodyEqual,
+        bool ResponseBodyEqual);
 
     private static string CsvEscape(string value)
     {
