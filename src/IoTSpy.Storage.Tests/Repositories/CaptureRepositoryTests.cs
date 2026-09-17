@@ -197,4 +197,24 @@ public class CaptureRepositoryTests : IDisposable
 
         Assert.Equal(3, await repo.CountAsync(new CaptureFilter(HeaderSearch: "Bearer"), TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task GetPagedAsync_FilterByBodySearch_MatchesRequestOrResponseBody()
+    {
+        var repo = new CaptureRepository(_db);
+        var c1 = MakeCapture();
+        c1.RequestBody = "{\"apiKey\":\"sk-secret-token\"}";
+        var c2 = MakeCapture();
+        c2.ResponseBody = "{\"apiKey\":\"sk-secret-token\"}";
+        var c3 = MakeCapture();
+        c3.RequestBody = "{\"unrelated\":\"value\"}";
+        await repo.AddAsync(c1, TestContext.Current.CancellationToken);
+        await repo.AddAsync(c2, TestContext.Current.CancellationToken);
+        await repo.AddAsync(c3, TestContext.Current.CancellationToken);
+
+        var results = await repo.GetPagedAsync(new CaptureFilter(BodySearch: "sk-secret-token"), 1, 50, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(2, await repo.CountAsync(new CaptureFilter(BodySearch: "sk-secret-token"), TestContext.Current.CancellationToken));
+    }
 }
