@@ -79,15 +79,23 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 825 backend tests across 8 test projects; 102 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
-- 21 REST controllers, 196 endpoints (added `ScanScopeController`)
-- 25 EF Core migrations up through `AddAuditArchive`
+- 917 backend `[Fact]`/`[Theory]` attributes across 9 test projects (989 executed test cases); 102 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 22 REST controllers, 208 endpoints
+- 27 EF Core migrations up through `AddScheduledScanLastRunStatus`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
-> Counts above last verified 2026-05-14. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
+> Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### feature/plugin-signing-audit-tiered-retention (latest)
+### feature/config-export-import-polish (latest)
+`docs/CODE-REVIEW-FINDINGS.md` items #29, #30, #31, #32, #34, #35 (the "incomplete-feature polish" PR):
+- HAR export headers (#29): `IoTSpy.Core.Utilities.HttpHeaderParser` parses the raw `Name: Value\r\n...` header text actually stored in `CapturedRequest.RequestHeaders`/`ResponseHeaders` (despite their "JSON-serialized" doc comment); `CapturesController.BuildHar` and `ParseContentType` both now use it instead of the previous silently-broken `JsonDocument.Parse` assumption
+- Config export/import round-trip (#30, #31): `AdminController.ExportConfig` now includes standalone `ContentReplacementRule`s and `ProtoSchema`s; new `POST /api/admin/import/config` imports the parts of the bundle `/api/manipulation/import` doesn't already own (scheduled scans, fuzzer jobs, OpenRTB policies, standalone content rules, proto schemas), regenerating IDs on every entity
+- `ScheduledScan` last-run outcome (#32): `LastRunStatus`/`LastRunError` columns (migration `AddScheduledScanLastRunStatus`); `ScheduledScanService` now polls the started scan job to a terminal status before recording the outcome — this also fixes a pre-existing bug where drift detection read an unfinished scan's (empty) findings
+- `ProtoParser.FromJson`/`ToJson` (#34): replaced the hand-rolled comma/colon splitter with `System.Text.Json`, fixing incorrect parsing of field names containing `,` or `:`
+- Real storage size stats (#35): `AdminController.GetStats` reports a real `database.estimatedSizeBytes` (SQLite `PRAGMA page_count * page_size`, Postgres `pg_database_size`) instead of the previous `count * 2048` / `count * 512` magic numbers
+
+### feature/plugin-signing-audit-tiered-retention (previous)
 - Plugin signing (#16): `PluginSignatureVerifier` validates `.manifest.json` (SHA-256 hash + RSA/ECDSA signature + X.509 cert) for each DLL; `PluginTrustStatus` enum; `Plugins:RequireSignedPlugins` + `Plugins:TrustedSignerThumbprints` config; Admin Plugins tab shows Trust/Signer columns; ADR at `docs/adr/0001-plugin-signing.md`; 7 new `PluginLoaderServiceTests`
 - Audit tiered retention (#46): `AuditArchiveEntry` + `AuditArchive` table (migration `AddAuditArchive`); `ArchiveOlderThanAsync`/`PurgeArchiveOlderThanAsync` on `IAuditRepository`; `DataRetentionService` archives before purge; `POST/DELETE /api/admin/audit/archive`; DatabaseTab Audit Log card with archive/purge-archive sliders; ADR at `docs/adr/0002-audit-tiered-retention.md`
 

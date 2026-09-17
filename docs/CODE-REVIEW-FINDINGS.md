@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 34 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #45, #46, #47, #49, #50 |
+| ✅ Completed | 40 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #45, #46, #47, #49, #50 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 18 | #29–#44, #48 |
+| 🟨 Medium remaining | 12 | #33, #36–#44, #48 |
 | 🟩 Low remaining | 9 | #51–#59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35).
 
 ---
 
@@ -35,19 +35,7 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 
 ### Incomplete shipped features
 
-**29. HAR export emits empty `headers: []`** — `CapturesController.cs:166-184`. Columns `RequestHeaders` / `ResponseHeaders` exist; deserialize them into the HAR output. Without this, the HAR is technically valid but useless to Chrome DevTools / mitmproxy.
-
-**30. `ExportConfig` omits `ContentReplacementRule` and `ProtoSchema`** — `AdminController.cs:159`. Backup/restore silently loses standalone content rules (post-Phase 22) and gRPC proto schemas (Batch 6). Extend the export.
-
-**31. No `ImportConfig` endpoint exists** — `/api/manipulation/import` only restores rulesets. Full config round-trip impossible. Add `POST /api/admin/import/config`. Pairs with #30.
-
-**32. `ScheduledScan` has no FK to last-run scan job, no failure flag** — admins can't tell whether the 2 AM scan succeeded. Add `LastRunScanJobId`, `LastRunStatus`, `LastRunError` columns + migration.
-
 **33. Report covers scan findings only** — `ReportService.cs:50` only loads `ScanJob` + `ScanFinding`. No captures, TLS metadata, annotations, MQTT/DNS messages. Not a usable pen-test deliverable. Redesign report sections + template system.
-
-**34. `ProtoParser.FromJson` is a fragile hand-rolled parser** — `ProtoParser.cs:89-106` splits on `,` and `:` strings; breaks on legal proto field names containing those chars. Replace with `System.Text.Json.JsonSerializer`.
-
-**35. `AdminController.GetStats` uses magic-number storage estimates** — `count * 2048L` and `count * 512L`. Use `PRAGMA page_count * page_size` for SQLite, `pg_relation_size` for Postgres.
 
 ### Missing user stories (high-value)
 
@@ -161,19 +149,27 @@ Each entry includes the closing PR. Use `gh pr view <num>` for the full diff and
 
 - **#47 — Scanner `MaxConcurrency` defaulted to 100** [PR #63] — default lowered to 25; user values clamped to ≤100.
 
+### Incomplete-feature polish (6 of 6) ✅
+
+- **#29 — HAR export emits empty `headers: []`** [branch: feature/config-export-import-polish] — new `IoTSpy.Core.Utilities.HttpHeaderParser` parses the raw `Name: Value\r\n...` text actually written to `CapturedRequest.RequestHeaders`/`ResponseHeaders` by the proxy pipeline (the "JSON-serialized" doc comment on those properties was wrong). `CapturesController.BuildHar` populates real header arrays for both request and response; `ParseContentType` (used by the streaming-asset export path) fixed the same way instead of its previous silently-failing `JsonDocument.Parse`. New `HttpHeaderParserTests` (6 tests) + HAR header-population regression test in `CaptureExportTests`.
+- **#30 / #31 — Config export/import round-trip** [branch: feature/config-export-import-polish] — `AdminController.ExportConfig` now includes standalone `ContentReplacementRule`s (`ApiSpecDocumentId == null`) and `ProtoSchema`s. New `POST /api/admin/import/config` (`ImportConfigDto`) imports scheduled scans, fuzzer jobs, OpenRTB PII policies, standalone content rules, and proto schemas — the parts of the export bundle `/api/manipulation/import` doesn't already own — regenerating every entity's `Id` per the existing `ImportRuleset` pattern. Content rules without a `Host` are skipped and counted, not thrown. Audit entry written on import. 4 new `AdminControllerTests`.
+- **#32 — `ScheduledScan` has no last-run outcome** [branch: feature/config-export-import-polish] — `LastRunStatus`/`LastRunError` columns (migration `AddScheduledScanLastRunStatus`); reused the existing `LastScanJobId` FK rather than adding a duplicate. `ScheduledScanService` now polls the started scan job to a terminal status (`Completed`/`Failed`/`Cancelled`, 2s interval, 5min cap) before recording the outcome and before running drift detection — incidentally fixing a pre-existing bug where drift detection read an unfinished scan's (empty) findings, since `StartScanAsync` returns immediately and runs the scan on a background `Task.Run`. Device-not-found and exception paths also record `Failed` + a reason. 4 new `ScheduledScanServiceTests`.
+- **#34 — `ProtoParser.FromJson`/`ToJson` fragile hand-rolled parser** [branch: feature/config-export-import-polish] — both replaced with `System.Text.Json.JsonSerializer`; on-disk `{"1":"name"}` shape unchanged since `Dictionary<int,string>` serializes int keys as JSON string keys natively. Fixes incorrect parsing of field names containing `,` or `:`. 2 new `ProtoParserTests`.
+- **#35 — `AdminController.GetStats` magic-number storage estimates** [branch: feature/config-export-import-polish] — replaced the fabricated `count * 2048` / `count * 512` per-entity numbers with one real `database.estimatedSizeBytes` (SQLite: `PRAGMA page_count * page_size`; Postgres: `pg_database_size(current_database())`), read via raw ADO (`SqlQueryRaw<T>` can't compose over non-composable `PRAGMA`/PRAGMA-like statements).
+
 ---
 
 ## Recommended next PRs
 
-Updated after feature/plugin-signing-audit-tiered-retention landed. All Critical and High items are now resolved. Remaining PRs in priority order:
+Updated after feature/config-export-import-polish landed. All Critical, High, and the "incomplete-feature polish" Medium items are now resolved. Remaining PRs in priority order:
 
-1. **Incomplete-feature polish PR** — bundle #29 (HAR headers), #30 + #31 (config export/import round-trip including `ContentReplacementRule` + `ProtoSchema`), #32 (scheduled-scan `LastRunScanJobId` / `LastRunStatus` columns + migration), #34 (replace `ProtoParser.FromJson` hand-rolled split with `JsonSerializer`), #35 (real storage estimates via `PRAGMA page_count * page_size` / `pg_relation_size`). All contained, all safe; can be one PR or split per concern.
-
-2. **User-story PRs (medium, high-value)** — pick one per persona-PR:
+1. **User-story PRs (medium, high-value)** — pick one per persona-PR:
    - Researcher: #36 (capture-to-curl `GET /api/captures/{id}/curl`), #39 (body FTS5 search on `RequestBody`/`ResponseBody`), #55 (capture diff endpoint)
    - Pen-tester: #38 (replay base-URL override end-to-end), #57 (CVSS override `PATCH /api/scanner/findings/{id}`), #56 (project/workspace concept)
    - Developer: #37 (`POST /api/captures/import/har`)
    - Admin: #41 (audit `UsersTab.tsx` create/edit wiring), #42 (backup/restore endpoints), #43 (`GET/PUT /api/admin/retention` + DatabaseTab UI), #40 (in-app SignalR alerts via collaboration hub)
+
+2. **Report redesign** — #33. `ReportService` only covers scan findings today; not a usable pen-test deliverable without captures, TLS metadata, annotations, and protocol messages.
 
 3. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
 

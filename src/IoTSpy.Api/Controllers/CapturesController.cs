@@ -1,5 +1,6 @@
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
+using IoTSpy.Core.Utilities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text;
@@ -164,7 +165,8 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
                     method = r.Method,
                     url = $"{r.Scheme}://{r.Host}{r.Path}{r.Query}",
                     httpVersion = "HTTP/1.1",
-                    headers = Array.Empty<object>(),
+                    headers = HttpHeaderParser.ParseHeaderLines(r.RequestHeaders)
+                        .Select(h => new { name = h.Name, value = h.Value }),
                     queryString = Array.Empty<object>(),
                     cookies = Array.Empty<object>(),
                     headersSize = -1,
@@ -175,7 +177,8 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
                     status = r.StatusCode,
                     statusText = r.StatusMessage,
                     httpVersion = "HTTP/1.1",
-                    headers = Array.Empty<object>(),
+                    headers = HttpHeaderParser.ParseHeaderLines(r.ResponseHeaders)
+                        .Select(h => new { name = h.Name, value = h.Value }),
                     cookies = Array.Empty<object>(),
                     content = new { size = r.ResponseBodySize, mimeType = "application/octet-stream" },
                     redirectURL = "",
@@ -234,21 +237,8 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
         return (capture, body, contentType, ext, null);
     }
 
-    private static string? ParseContentType(string? headersJson)
-    {
-        if (string.IsNullOrEmpty(headersJson)) return null;
-        try
-        {
-            var doc = JsonDocument.Parse(headersJson);
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                if (prop.Name.Equals("content-type", StringComparison.OrdinalIgnoreCase))
-                    return prop.Value.GetString();
-            }
-        }
-        catch { }
-        return null;
-    }
+    private static string? ParseContentType(string? headers) =>
+        HttpHeaderParser.FindHeaderValue(headers, "Content-Type");
 
     private static string? MapStreamingExtension(string? contentType)
     {

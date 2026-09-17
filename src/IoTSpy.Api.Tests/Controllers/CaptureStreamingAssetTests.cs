@@ -4,7 +4,6 @@ using IoTSpy.Core.Models;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using System.Text;
-using System.Text.Json;
 using Xunit;
 
 namespace IoTSpy.Api.Tests.Controllers;
@@ -35,14 +34,13 @@ public class CaptureStreamingAssetTests : IDisposable
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private static string SseHeaders() =>
-        JsonSerializer.Serialize(new Dictionary<string, string> { ["Content-Type"] = "text/event-stream" });
+    // Capture headers are stored as raw "Name: Value\r\n..." HTTP header text
+    // (as written by the proxy pipeline), not JSON.
+    private static string SseHeaders() => "Content-Type: text/event-stream\r\n";
 
-    private static string NdjsonHeaders() =>
-        JsonSerializer.Serialize(new Dictionary<string, string> { ["Content-Type"] = "application/x-ndjson" });
+    private static string NdjsonHeaders() => "Content-Type: application/x-ndjson\r\n";
 
-    private static string JsonHeaders() =>
-        JsonSerializer.Serialize(new Dictionary<string, string> { ["Content-Type"] = "application/json" });
+    private static string JsonHeaders() => "Content-Type: application/json\r\n";
 
     private static CapturedRequest MakeSseCapture(string? body = "data: hello\n\n", string? headers = null) => new()
     {

@@ -31,10 +31,11 @@ public class AdminControllerTests
         var resp = await client.GetAsync("/api/admin/stats", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var json = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("captures", json);
-        Assert.Contains("packets", json);
-        Assert.Contains("scanFindings", json);
+        var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(json.TryGetProperty("captures", out _));
+        Assert.True(json.TryGetProperty("packets", out _));
+        Assert.True(json.TryGetProperty("scanFindings", out _));
+        Assert.True(json.GetProperty("database").GetProperty("estimatedSizeBytes").GetInt64() > 0);
     }
 
     [Fact]
@@ -138,7 +139,80 @@ public class AdminControllerTests
         var content = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("manipulationRules", content);
         Assert.Contains("scheduledScans", content);
+        Assert.Contains("contentReplacementRules", content);
+        Assert.Contains("protoSchemas", content);
         Assert.Contains("exportedAt", content);
+    }
+
+    [Fact]
+    public async Task ImportConfig_ResetsIdsAndPersistsEntities()
+    {
+        var client = await CreateAdminClientAsync();
+
+        var payload = new
+        {
+            protoSchemas = new[]
+            {
+                new { id = Guid.NewGuid(), name = "Widget", rawProto = "message Widget { string id = 1; }", fieldMapJson = "{\"1\":\"id\"}" }
+            },
+            openRtbPolicies = new[]
+            {
+                new { id = Guid.NewGuid(), enabled = true, fieldPath = "device.ifa", strategy = "Redact", priority = 1 }
+            },
+            contentReplacementRules = new[]
+            {
+                new { id = Guid.NewGuid(), host = "example.com", name = "rule-1", enabled = true, matchType = "BodyRegex", matchPattern = "/api", action = "ReplaceWithValue", replacementValue = "redacted" }
+            }
+        };
+
+        var importResp = await client.PostAsJsonAsync("/api/admin/import/config", payload, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, importResp.StatusCode);
+        var importJson = await importResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, importJson.GetProperty("protoSchemasImported").GetInt32());
+        Assert.Equal(1, importJson.GetProperty("openRtbPoliciesImported").GetInt32());
+        Assert.Equal(1, importJson.GetProperty("contentRulesImported").GetInt32());
+        Assert.Equal(0, importJson.GetProperty("contentRulesSkipped").GetInt32());
+
+        var exportResp = await client.GetAsync("/api/admin/export/config", TestContext.Current.CancellationToken);
+        var exportJson = await exportResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        var importedSchemaId = payload.protoSchemas[0].id;
+        var persistedSchemaIds = exportJson.GetProperty("protoSchemas").EnumerateArray()
+            .Select(s => s.GetProperty("id").GetGuid());
+        Assert.DoesNotContain(importedSchemaId, persistedSchemaIds); // Id was regenerated, not reused
+    }
+
+    [Fact]
+    public async Task ImportConfig_ContentRuleWithoutHost_IsSkipped()
+    {
+        var client = await CreateAdminClientAsync();
+
+        var payload = new
+        {
+            contentReplacementRules = new[]
+            {
+                new { id = Guid.NewGuid(), host = (string?)null, name = "no-host-rule", enabled = true, matchType = "BodyRegex", matchPattern = "/api", action = "ReplaceWithValue", replacementValue = "redacted" }
+            }
+        };
+
+        var resp = await client.PostAsJsonAsync("/api/admin/import/config", payload, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, json.GetProperty("contentRulesImported").GetInt32());
+        Assert.Equal(1, json.GetProperty("contentRulesSkipped").GetInt32());
+    }
+
+    [Fact]
+    public async Task ImportConfig_Unauthenticated_Returns401()
+    {
+        var factory = new IoTSpyWebApplicationFactory();
+        await factory.InitializeDbAsync();
+        var client = factory.CreateClient();
+
+        var resp = await client.PostAsJsonAsync("/api/admin/import/config", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
     [Fact]
