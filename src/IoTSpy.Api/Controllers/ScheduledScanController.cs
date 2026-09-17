@@ -28,7 +28,14 @@ public class ScheduledScanController(
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateScheduledScanDto dto, CancellationToken ct)
     {
-        if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, dto.TargetCidr, dto.TargetTag))
+        // Trim once, up front — CIDR validation and device-tag matching (ScheduledScanService.
+        // DeviceHasTag, which trims each device tag before comparing) both need to see the same
+        // normalized value the record ends up storing, or a value with stray whitespace would
+        // validate/store one way and then silently fail to match any device at fire time.
+        var targetCidr = dto.TargetCidr?.Trim();
+        var targetTag = dto.TargetTag?.Trim();
+
+        if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, targetCidr, targetTag))
             return BadRequest("Exactly one of DeviceId, TargetCidr, or TargetTag must be set.");
 
         if (dto.DeviceId.HasValue)
@@ -36,7 +43,7 @@ public class ScheduledScanController(
             var device = await devices.GetByIdAsync(dto.DeviceId.Value, ct);
             if (device is null) return NotFound("Device not found");
         }
-        else if (!string.IsNullOrWhiteSpace(dto.TargetCidr) && !IoTSpy.Scanner.CidrHelper.IsValidCidr(dto.TargetCidr))
+        else if (!string.IsNullOrWhiteSpace(targetCidr) && !IoTSpy.Scanner.CidrHelper.IsValidCidr(targetCidr))
         {
             return BadRequest("Invalid CIDR.");
         }
@@ -54,8 +61,8 @@ public class ScheduledScanController(
         var scan = new ScheduledScan
         {
             DeviceId = dto.DeviceId,
-            TargetCidr = dto.TargetCidr,
-            TargetTag = dto.TargetTag,
+            TargetCidr = targetCidr,
+            TargetTag = targetTag,
             CronExpression = dto.CronExpression,
             IsEnabled = true
         };
@@ -83,10 +90,13 @@ public class ScheduledScanController(
 
         // Changing the target is atomic: whichever selector is supplied replaces all
         // three fields, so the exactly-one-target invariant can never be left violated
-        // by a partial patch.
-        if (dto.DeviceId.HasValue || !string.IsNullOrWhiteSpace(dto.TargetCidr) || !string.IsNullOrWhiteSpace(dto.TargetTag))
+        // by a partial patch. Trimmed up front for the same reason as Create above.
+        var targetCidr = dto.TargetCidr?.Trim();
+        var targetTag = dto.TargetTag?.Trim();
+
+        if (dto.DeviceId.HasValue || !string.IsNullOrWhiteSpace(targetCidr) || !string.IsNullOrWhiteSpace(targetTag))
         {
-            if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, dto.TargetCidr, dto.TargetTag))
+            if (!ScheduledScanTargetSelector.HasExactlyOneTarget(dto.DeviceId, targetCidr, targetTag))
                 return BadRequest("Exactly one of DeviceId, TargetCidr, or TargetTag must be set.");
 
             if (dto.DeviceId.HasValue)
@@ -97,19 +107,19 @@ public class ScheduledScanController(
                 scan.TargetCidr = null;
                 scan.TargetTag = null;
             }
-            else if (!string.IsNullOrWhiteSpace(dto.TargetCidr))
+            else if (!string.IsNullOrWhiteSpace(targetCidr))
             {
-                if (!IoTSpy.Scanner.CidrHelper.IsValidCidr(dto.TargetCidr))
+                if (!IoTSpy.Scanner.CidrHelper.IsValidCidr(targetCidr))
                     return BadRequest("Invalid CIDR.");
                 scan.DeviceId = null;
-                scan.TargetCidr = dto.TargetCidr;
+                scan.TargetCidr = targetCidr;
                 scan.TargetTag = null;
             }
             else
             {
                 scan.DeviceId = null;
                 scan.TargetCidr = null;
-                scan.TargetTag = dto.TargetTag;
+                scan.TargetTag = targetTag;
             }
         }
 
