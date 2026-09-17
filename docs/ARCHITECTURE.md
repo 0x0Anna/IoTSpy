@@ -664,7 +664,7 @@ frontend/src/
 
 ## Test projects
 
-**1044 backend tests** across 9 test projects + 125 frontend component tests. All passing. Coverage reported via Coverlet + ReportGenerator in CI. Test coverage includes Phase 10 decoders, Phase 11 multi-user/TLS/tests, Phase 12 API spec generation, Phase 14 API keys, Phase 15 collaboration, Phase 20 admin/integration tests, Gaps Batch 5 (CoAP Block-wise/Observe, DNS EDNS0, WebSocket sub-protocol detection, MQTT topic statistics, rule cache), Gaps Batch 6 (gRPC schema upload, audit write-once trigger), the modal-system pass (RulePreviewModal accessibility + focus trap), scan-scope/consent-gate (CIDR enforcement, scope CRUD, CancellationToken hardening across all test files), and plugin-signing/audit-retention (PluginSignatureVerifier trust status + RSA/ECDSA crypto path coverage, DataRetentionService audit archiving).
+**1099 backend tests** across 9 test projects + 125 frontend component tests. All passing. Coverage reported via Coverlet + ReportGenerator in CI. Test coverage includes Phase 10 decoders, Phase 11 multi-user/TLS/tests, Phase 12 API spec generation, Phase 14 API keys, Phase 15 collaboration, Phase 20 admin/integration tests, Gaps Batch 5 (CoAP Block-wise/Observe, DNS EDNS0, WebSocket sub-protocol detection, MQTT topic statistics, rule cache), Gaps Batch 6 (gRPC schema upload, audit write-once trigger), the modal-system pass (RulePreviewModal accessibility + focus trap), scan-scope/consent-gate (CIDR enforcement, scope CRUD, CancellationToken hardening across all test files), and plugin-signing/audit-retention (PluginSignatureVerifier trust status + RSA/ECDSA crypto path coverage, DataRetentionService audit archiving).
 
 | Project | Test classes | Coverage |
 |---|---|---|
