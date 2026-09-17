@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -38,8 +39,9 @@ public class CertificatesController(
     [AllowAnonymous] // Allow download without auth for easy device setup
     public async Task<IActionResult> DownloadRootCaDer()
     {
+        var entry = await ca.GetOrCreateRootCaAsync();
         var der = await ca.ExportRootCaDerAsync();
-        return File(der, "application/x-x509-ca-cert", "iotspy-ca.crt");
+        return File(der, "application/x-x509-ca-cert", $"{SanitizeFilename(entry.CommonName)}.crt");
     }
 
     [HttpGet("root-ca/pem")]
@@ -50,7 +52,22 @@ public class CertificatesController(
         return File(
             System.Text.Encoding.UTF8.GetBytes(entry.CertificatePem),
             "application/x-pem-file",
-            "iotspy-ca.pem");
+            $"{SanitizeFilename(entry.CommonName)}.pem");
+    }
+
+    private static readonly Regex InvalidFilenameChars = new("[\\x00-\\x1F<>:\"/\\\\|?*]", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
+
+    /// <summary>Turns a user-supplied CA common name into a filesystem-safe filename (no extension), preserving case.</summary>
+    public static string SanitizeFilename(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "iotspy-ca";
+
+        var cleaned = InvalidFilenameChars.Replace(name, "");
+        cleaned = WhitespaceRun.Replace(cleaned, "-").Trim('-', '.', ' ');
+
+        return string.IsNullOrEmpty(cleaned) ? "iotspy-ca" : cleaned;
     }
 
     [HttpPost("root-ca/regenerate")]

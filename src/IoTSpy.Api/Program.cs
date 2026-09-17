@@ -181,6 +181,8 @@ if (!redisOptions.IsConfigured)
 builder.Services.AddSingleton<ExplicitProxyServer>();
 builder.Services.AddSingleton<TransparentProxyServer>();
 builder.Services.AddSingleton<IptablesHelper>();
+builder.Services.AddSingleton<IWindowsFirewallHelper, WindowsFirewallHelper>();
+builder.Services.AddSingleton<IPlatformInfo, PlatformInfo>();
 builder.Services.AddSingleton<ArpSpoofEngine>();
 builder.Services.AddSingleton<ICertificateAuthority, CertificateAuthority>();
 builder.Services.AddSingleton<IProxyService, ProxyService>();

@@ -2,6 +2,10 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* dvh accounts for mobile browsers resizing the viewport as the address bar
+     hides/shows during scroll; without it, nested scroll containers can have
+     their scroll position reset mid-scroll. Keep the 100vh fallback above. */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -133,6 +137,7 @@
 
 .loading-spinner--full-page {
   height: 100vh;
+  height: 100dvh;
   width: 100%;
 }
 

@@ -19,10 +19,6 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
   const [maxBodySizeKb, setMaxBodySizeKb] = useState(String(settings.maxBodySizeKb))
   const [autoStart, setAutoStart] = useState(settings.autoStart)
   const [transparentProxyPort, setTransparentProxyPort] = useState(String(settings.transparentProxyPort))
-  const [caCommonName, setCaCommonName] = useState(settings.caCommonName ?? 'IoTSpy CA')
-  const [caOrganization, setCaOrganization] = useState(settings.caOrganization ?? 'IoTSpy')
-  const [caCountry, setCaCountry] = useState(settings.caCountry ?? 'US')
-  const [caValidityYears, setCaValidityYears] = useState(String(settings.caValidityYears ?? 10))
   const [targetDeviceIp, setTargetDeviceIp] = useState(settings.targetDeviceIp)
   const [gatewayIp, setGatewayIp] = useState(settings.gatewayIp)
   const [networkInterface, setNetworkInterface] = useState(settings.networkInterface)
@@ -71,10 +67,6 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
       captureResponseBodies,
       maxBodySizeKb: bodyKb,
       autoStart,
-      caCommonName: caCommonName.trim() || undefined,
-      caOrganization: caOrganization.trim() || undefined,
-      caCountry: caCountry.trim() || undefined,
-      caValidityYears: Number(caValidityYears) || undefined,
     }
     if (mode === 'GatewayRedirect') {
       update.transparentProxyPort = Number(transparentProxyPort) || settings.transparentProxyPort
@@ -273,64 +265,6 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
             />
             Auto-start proxy when server launches
           </label>
-
-          <div className="settings-section-title">CA Certificate</div>
-
-          <div className="settings-hint" style={{ marginBottom: 8 }}>
-            These fields are applied when a new root CA is generated. To apply changes, use <strong>Admin → Certificates → Regenerate CA</strong> after saving.
-          </div>
-
-          <div className="settings-row">
-            <div className="settings-field">
-              <label className="settings-label" htmlFor="ca-cn">Common Name</label>
-              <input
-                id="ca-cn"
-                className="settings-input"
-                type="text"
-                value={caCommonName}
-                onChange={(e) => setCaCommonName(e.target.value)}
-                placeholder="IoTSpy CA"
-              />
-            </div>
-            <div className="settings-field">
-              <label className="settings-label" htmlFor="ca-org">Organization</label>
-              <input
-                id="ca-org"
-                className="settings-input"
-                type="text"
-                value={caOrganization}
-                onChange={(e) => setCaOrganization(e.target.value)}
-                placeholder="IoTSpy"
-              />
-            </div>
-          </div>
-
-          <div className="settings-row">
-            <div className="settings-field" style={{ maxWidth: 100 }}>
-              <label className="settings-label" htmlFor="ca-country">Country (2-letter)</label>
-              <input
-                id="ca-country"
-                className="settings-input"
-                type="text"
-                maxLength={2}
-                value={caCountry}
-                onChange={(e) => setCaCountry(e.target.value.toUpperCase())}
-                placeholder="US"
-              />
-            </div>
-            <div className="settings-field" style={{ maxWidth: 120 }}>
-              <label className="settings-label" htmlFor="ca-validity">Validity (years)</label>
-              <input
-                id="ca-validity"
-                className="settings-input"
-                type="number"
-                min={1}
-                max={30}
-                value={caValidityYears}
-                onChange={(e) => setCaValidityYears(e.target.value)}
-              />
-            </div>
-          </div>
 
           <div className="settings-section-title">Help</div>
 
