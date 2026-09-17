@@ -404,6 +404,36 @@ public class ManipulationControllerTests
     }
 
     [Fact]
+    public async Task StartReplay_WithHostPortPathQueryOverrides_AppliesAllOverrides()
+    {
+        var captureId = Guid.NewGuid();
+        var capture = new CapturedRequest
+        {
+            Id = captureId, Method = "GET", Host = "original.example.com",
+            Scheme = "https", Port = 443, Path = "/original", Query = "?a=1"
+        };
+        var captures = Substitute.For<ICaptureRepository>();
+        captures.GetByIdAsync(captureId, Arg.Any<CancellationToken>()).Returns(capture);
+        var manip = Substitute.For<IManipulationService>();
+        manip.ReplayAsync(Arg.Any<ReplaySession>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.Arg<ReplaySession>());
+
+        var dto = new StartReplayDto(captureId, Host: "override.example.com", Port: 8443, Path: "/override", Query: "?b=2");
+        var result = await MakeController(manipService: manip, captures: captures)
+            .StartReplay(dto, TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        await manip.Received(1).ReplayAsync(
+            Arg.Is<ReplaySession>(s =>
+                s.RequestHost == "override.example.com" &&
+                s.RequestPort == 8443 &&
+                s.RequestPath == "/override" &&
+                s.RequestQuery == "?b=2" &&
+                s.RequestMethod == "GET"), // omitted override falls back to the original capture's method
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task StartFuzzer_WithBypassTlsValidation_SetsJobFlagAndAudits()
     {
         var captureId = Guid.NewGuid();

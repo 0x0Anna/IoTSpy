@@ -24,7 +24,8 @@ public class FilteringTests
         return new(Substitute.For<IScannerService>(),
             scanJobs ?? Substitute.For<IScanJobRepository>(),
             Substitute.For<IDeviceRepository>(),
-            scopes);
+            scopes,
+            Substitute.For<IAuditRepository>());
     }
 
     [Fact]

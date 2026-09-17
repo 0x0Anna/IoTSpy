@@ -3,6 +3,7 @@ using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 
@@ -15,7 +16,8 @@ public class ScannerController(
     IScannerService scanner,
     IScanJobRepository scanJobs,
     IDeviceRepository devices,
-    IScanScopeRepository scanScopes) : ControllerBase
+    IScanScopeRepository scanScopes,
+    IAuditRepository audit) : ControllerBase
 {
     // Bounds for the dual-use scanner. Aggressive defaults are unfriendly on
     // shared networks; the previous MaxConcurrency=100 default could SYN-flood
@@ -25,6 +27,11 @@ public class ScannerController(
     private const int MaxPortRangeStringLength = 256;
     private const int DefaultMaxConcurrency = 25;
     private const int MaxAllowedConcurrency = 100;
+
+    private Guid? CurrentUserId => Guid.TryParse(
+        HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : null;
+    private string CurrentUsername => HttpContext.User.Identity?.Name ?? "system";
+    private string CurrentIp => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
 
     [HttpPost("scan")]
     public async Task<IActionResult> StartScan([FromBody] StartScanDto dto, CancellationToken ct = default)
@@ -151,6 +158,31 @@ public class ScannerController(
         return Ok(new { cancelled = runningIds.Count });
     }
 
+    [HttpPatch("findings/{id:guid}")]
+    public async Task<IActionResult> PatchFinding(Guid id, [FromBody] PatchFindingDto dto, CancellationToken ct)
+    {
+        var finding = await scanJobs.GetFindingByIdAsync(id, ct);
+        if (finding is null) return NotFound();
+
+        var oldScore = finding.CvssScore;
+        finding.CvssScore = dto.CvssScore;
+        var updated = await scanJobs.UpdateFindingAsync(finding, ct);
+
+        await audit.AddAsync(new AuditEntry
+        {
+            UserId = CurrentUserId,
+            Username = CurrentUsername,
+            Action = "FindingCvssOverride",
+            EntityType = "ScanFinding",
+            EntityId = id.ToString(),
+            OldValue = oldScore?.ToString(),
+            NewValue = dto.CvssScore?.ToString(),
+            IpAddress = CurrentIp
+        }, ct);
+
+        return Ok(updated);
+    }
+
     [HttpGet("jobs/{id:guid}/export")]
     public async Task<IActionResult> ExportFindings(Guid id, CancellationToken ct)
     {
@@ -179,3 +211,5 @@ public record BulkDeleteJobsDto(
     ScanStatus? Status = null,
     DateTimeOffset? CompletedBefore = null
 );
+
+public record PatchFindingDto(double? CvssScore);

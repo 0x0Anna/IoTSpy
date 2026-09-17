@@ -17,7 +17,7 @@ public class ScanExportTests
     {
         var scopes = Substitute.For<IScanScopeRepository>();
         scopes.GetActiveAsync(Arg.Any<CancellationToken>()).Returns(new List<ScanScope>());
-        return new(Substitute.For<IScannerService>(), scanJobs, Substitute.For<IDeviceRepository>(), scopes);
+        return new(Substitute.For<IScannerService>(), scanJobs, Substitute.For<IDeviceRepository>(), scopes, Substitute.For<IAuditRepository>());
     }
 
     [Fact]

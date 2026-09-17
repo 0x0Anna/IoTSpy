@@ -79,15 +79,21 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 927 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1000 executed test cases); 102 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
-- 22 REST controllers, 210 endpoints
+- 937 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1010 executed test cases); 116 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 22 REST controllers, 211 endpoints
 - 27 EF Core migrations up through `AddScheduledScanLastRunStatus`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### feature/capture-curl-diff (latest)
+### feature/replay-override-cvss-tests (latest)
+`docs/CODE-REVIEW-FINDINGS.md` Pen-tester-persona items #38, #57 (#56 investigated, deliberately deferred — see doc):
+- Replay override verified end-to-end (#38): `StartReplayDto` Host/Port/Path/Query overrides already worked correctly through `ReplayService`; added 6 `ReplayServiceTests` (capturing `HttpMessageHandler`) + a `ManipulationControllerTests` override case, plus Port/Query inputs in `ReplayPanel.tsx` (backend already supported them, UI didn't expose them)
+- CVSS override (#57): `PATCH /api/scanner/findings/{id}` (`PatchFindingDto`) via new `IScanJobRepository.GetFindingByIdAsync`/`UpdateFindingAsync`; audited as `FindingCvssOverride`
+- #56 (project/workspace concept) investigated and deliberately deferred: no existing tag/grouping field on `Device`/`ScanJob`/`InvestigationSession`, full implementation would touch ~14 call sites across ~5 controllers + 3 repositories with multiple migrations — flagged for its own design discussion
+
+### feature/capture-curl-diff (previous)
 `docs/CODE-REVIEW-FINDINGS.md` Researcher-persona items #36, #39, #55:
 - Capture-to-curl (#36): `GET /api/captures/{id}/curl` reconstructs a runnable curl command (method, headers via `HttpHeaderParser`, `--data-raw` body, default-port suppression, POSIX shell-quoting)
 - Body search correction (#39): `?q=` on `GET /api/captures` already searched `RequestBody`/`ResponseBody` (the docs describing it as URL/host-only were stale, now fixed) — real FTS5 was evaluated and intentionally not built (SQLite-only, would need sync triggers plus a separate Postgres path); added a 3-char `MinSearchTermLength` guard on `?q=`/`?headerQ=` instead, since a 1-2 char `LIKE '%x%'` scans the whole table on any provider

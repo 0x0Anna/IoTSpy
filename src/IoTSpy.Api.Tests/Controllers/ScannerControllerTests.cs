@@ -1,7 +1,9 @@
+using System.Security.Claims;
 using IoTSpy.Api.Controllers;
 using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;
@@ -15,18 +17,35 @@ file static class ScannerControllerFactory
         IScannerService? scanner = null,
         IScanJobRepository? scanJobs = null,
         IDeviceRepository? devices = null,
-        IScanScopeRepository? scopes = null)
+        IScanScopeRepository? scopes = null,
+        IAuditRepository? audit = null)
     {
         if (scopes is null)
         {
             scopes = Substitute.For<IScanScopeRepository>();
             scopes.GetActiveAsync(Arg.Any<CancellationToken>()).Returns(new List<ScanScope>());
         }
-        return new ScannerController(
+        var controller = new ScannerController(
             scanner  ?? Substitute.For<IScannerService>(),
             scanJobs ?? Substitute.For<IScanJobRepository>(),
             devices  ?? Substitute.For<IDeviceRepository>(),
-            scopes);
+            scopes,
+            audit ?? Substitute.For<IAuditRepository>());
+
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new Claim(ClaimTypes.Name, "testuser"),
+        };
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"))
+            }
+        };
+
+        return controller;
     }
 }
 
@@ -292,5 +311,65 @@ public class ScannerControllerTests
 
         Assert.IsType<NoContentResult>(result);
         await scanJobs.Received(1).DeleteAsync(id, Arg.Any<CancellationToken>());
+    }
+
+    // ── PatchFinding (CVSS override) ────────────────────────────────────────────
+
+    [Fact]
+    public async Task PatchFinding_WhenFound_UpdatesScoreAndAudits()
+    {
+        var finding = new ScanFinding { CveId = "CVE-2023-12345", CvssScore = 5.0 };
+        var scanJobs = Substitute.For<IScanJobRepository>();
+        scanJobs.GetFindingByIdAsync(finding.Id, Arg.Any<CancellationToken>()).Returns(finding);
+        scanJobs.UpdateFindingAsync(Arg.Any<ScanFinding>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.Arg<ScanFinding>());
+        var audit = Substitute.For<IAuditRepository>();
+
+        var controller = ScannerControllerFactory.Make(scanJobs: scanJobs, audit: audit);
+        var result = await controller.PatchFinding(finding.Id, new PatchFindingDto(9.8), TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var updated = Assert.IsType<ScanFinding>(result.Value);
+        Assert.Equal(9.8, updated.CvssScore);
+        await scanJobs.Received(1).UpdateFindingAsync(
+            Arg.Is<ScanFinding>(f => f.Id == finding.Id && f.CvssScore == 9.8),
+            Arg.Any<CancellationToken>());
+        await audit.Received(1).AddAsync(
+            Arg.Is<AuditEntry>(e =>
+                e.Action == "FindingCvssOverride" &&
+                e.EntityType == "ScanFinding" &&
+                e.EntityId == finding.Id.ToString() &&
+                e.OldValue == "5" &&
+                e.NewValue == "9.8"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PatchFinding_WhenNotFound_ReturnsNotFound()
+    {
+        var scanJobs = Substitute.For<IScanJobRepository>();
+        scanJobs.GetFindingByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((ScanFinding?)null);
+
+        var controller = ScannerControllerFactory.Make(scanJobs: scanJobs);
+        var result = await controller.PatchFinding(Guid.NewGuid(), new PatchFindingDto(9.8), TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task PatchFinding_NullScore_ClearsOverride()
+    {
+        var finding = new ScanFinding { CvssScore = 7.5 };
+        var scanJobs = Substitute.For<IScanJobRepository>();
+        scanJobs.GetFindingByIdAsync(finding.Id, Arg.Any<CancellationToken>()).Returns(finding);
+        scanJobs.UpdateFindingAsync(Arg.Any<ScanFinding>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.Arg<ScanFinding>());
+
+        var controller = ScannerControllerFactory.Make(scanJobs: scanJobs);
+        var result = await controller.PatchFinding(finding.Id, new PatchFindingDto(null), TestContext.Current.CancellationToken) as OkObjectResult;
+
+        Assert.NotNull(result);
+        var updated = Assert.IsType<ScanFinding>(result.Value);
+        Assert.Null(updated.CvssScore);
     }
 }

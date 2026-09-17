@@ -16,7 +16,9 @@ export default function ReplayPanel({ replays, loading, error, captures, onRepla
   const [selectedCaptureId, setSelectedCaptureId] = useState('')
   const [method, setMethod] = useState('')
   const [host, setHost] = useState('')
+  const [port, setPort] = useState('')
   const [path, setPath] = useState('')
+  const [query, setQuery] = useState('')
   const [headers, setHeaders] = useState('')
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
@@ -31,7 +33,9 @@ export default function ReplayPanel({ replays, loading, error, captures, onRepla
     if (capture) {
       setMethod(capture.method)
       setHost(capture.host)
+      setPort(capture.port ? String(capture.port) : '')
       setPath(capture.path)
+      setQuery(capture.query)
       setHeaders(capture.requestHeaders)
       setBody('')
     }
@@ -40,11 +44,14 @@ export default function ReplayPanel({ replays, loading, error, captures, onRepla
   const handleSend = async () => {
     if (!selectedCaptureId) return
     setSending(true)
+    const parsedPort = port ? Number(port) : undefined
     const req: CreateReplayRequest = {
       captureId: selectedCaptureId,
       method: method || undefined,
       host: host || undefined,
+      port: Number.isFinite(parsedPort) ? parsedPort : undefined,
       path: path || undefined,
+      query: query || undefined,
       requestHeaders: headers || undefined,
       requestBody: body || undefined,
       bypassTlsValidation: bypassTls || undefined,
@@ -128,11 +135,28 @@ export default function ReplayPanel({ replays, loading, error, captures, onRepla
                 />
               </label>
               <label className="manip-form__label">
+                Port
+                <input
+                  className="manip-form__input manip-form__input--narrow"
+                  type="number"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                />
+              </label>
+              <label className="manip-form__label">
                 Path
                 <input
                   className="manip-form__input"
                   value={path}
                   onChange={(e) => setPath(e.target.value)}
+                />
+              </label>
+              <label className="manip-form__label">
+                Query
+                <input
+                  className="manip-form__input"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
                 />
               </label>
             </div>

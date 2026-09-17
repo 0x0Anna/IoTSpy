@@ -100,7 +100,7 @@ public class BulkOperationsTests
 
         var scopes = Substitute.For<IScanScopeRepository>();
         scopes.GetActiveAsync(Arg.Any<CancellationToken>()).Returns(new List<ScanScope>());
-        var controller = new ScannerController(scanner, scanJobs, Substitute.For<IDeviceRepository>(), scopes);
+        var controller = new ScannerController(scanner, scanJobs, Substitute.For<IDeviceRepository>(), scopes, Substitute.For<IAuditRepository>());
         var result = await controller.CancelAllScans(TestContext.Current.CancellationToken) as OkObjectResult;
 
         Assert.NotNull(result);
@@ -121,7 +121,7 @@ public class BulkOperationsTests
         var scanner = Substitute.For<IScannerService>();
         var scopes = Substitute.For<IScanScopeRepository>();
         scopes.GetActiveAsync(Arg.Any<CancellationToken>()).Returns(new List<ScanScope>());
-        var controller = new ScannerController(scanner, scanJobs, Substitute.For<IDeviceRepository>(), scopes);
+        var controller = new ScannerController(scanner, scanJobs, Substitute.For<IDeviceRepository>(), scopes, Substitute.For<IAuditRepository>());
         var result = await controller.CancelAllScans(TestContext.Current.CancellationToken) as OkObjectResult;
 
         Assert.NotNull(result);

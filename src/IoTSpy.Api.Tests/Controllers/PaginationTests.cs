@@ -132,7 +132,7 @@ public class PaginationTests
         var scopes = Substitute.For<IScanScopeRepository>();
         scopes.GetActiveAsync(Arg.Any<CancellationToken>()).Returns(new List<ScanScope>());
         var controller = new ScannerController(
-            Substitute.For<IScannerService>(), scanJobs, Substitute.For<IDeviceRepository>(), scopes);
+            Substitute.For<IScannerService>(), scanJobs, Substitute.For<IDeviceRepository>(), scopes, Substitute.For<IAuditRepository>());
         var result = await controller.ListJobs(1, 20, ct: TestContext.Current.CancellationToken) as OkObjectResult;
 
         Assert.NotNull(result);
