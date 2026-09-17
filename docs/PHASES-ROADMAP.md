@@ -11,7 +11,6 @@ See [PHASES-COMPLETED.md](PHASES-COMPLETED.md) for all completed work including 
 ## Future Enhancement Areas
 
 ### Scanner & Anomaly
-- **Concurrent multi-device scanning** — Scan queue with configurable parallelism; currently single-device sequential
 - **Scan findings correlation** — Group findings by vulnerability class, CVE, affected service; currently raw list only
 - **Custom anomaly rules** — Declarative anomaly rules (similar to the manipulation rules engine) to flag specific traffic patterns; replaces purely statistical Welford baseline
 - **Behavioral fingerprinting** — Persistent per-device baseline across proxy restarts; detect changes in device communication patterns over time

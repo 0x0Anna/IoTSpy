@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
@@ -7,53 +8,143 @@ using Microsoft.Extensions.Logging;
 
 namespace IoTSpy.Scanner;
 
-public class ScannerService(
-    IServiceScopeFactory scopeFactory,
-    PortScanner portScanner,
-    ServiceFingerprinter fingerprinter,
-    CredentialTester credentialTester,
-    CveLookupService cveLookup,
-    ConfigAuditor configAuditor,
-    ILogger<ScannerService> logger) : IScannerService
+public class ScannerService : IScannerService
 {
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runningScans = new();
+    /// <summary>
+    /// Conservative default: each scan job can itself run up to
+    /// <see cref="PortScanner"/>'s per-job MaxConcurrency (up to 100) concurrent TCP probes,
+    /// so an unbounded number of concurrent jobs is a resource-exhaustion risk. 5 concurrent
+    /// jobs caps worst case outbound connections at 500 while still letting several devices
+    /// be scanned in parallel. Overridable via Scanner:MaxConcurrentScans.
+    /// </summary>
+    public const int DefaultMaxConcurrentScans = 5;
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly PortScanner _portScanner;
+    private readonly ServiceFingerprinter _fingerprinter;
+    private readonly CredentialTester _credentialTester;
+    private readonly CveLookupService _cveLookup;
+    private readonly ConfigAuditor _configAuditor;
+    private readonly ILogger<ScannerService> _logger;
+
+    // Populated immediately in StartScanAsync (covers both queued-but-not-yet-admitted and
+    // actively-running jobs), removed once the job reaches a terminal state or is cancelled.
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _scans = new();
+
+    // Jobs that are enqueued but have not yet been picked up by a worker loop. Used so a
+    // cancel of a still-queued job can make the worker loop skip it entirely instead of
+    // executing it.
+    private readonly ConcurrentDictionary<Guid, byte> _queuedJobIds = new();
+
+    private readonly Channel<Guid> _queue = Channel.CreateUnbounded<Guid>();
+
+    public ScannerService(
+        IServiceScopeFactory scopeFactory,
+        PortScanner portScanner,
+        ServiceFingerprinter fingerprinter,
+        CredentialTester credentialTester,
+        CveLookupService cveLookup,
+        ConfigAuditor configAuditor,
+        ILogger<ScannerService> logger,
+        int maxConcurrentScans = DefaultMaxConcurrentScans)
+    {
+        _scopeFactory = scopeFactory;
+        _portScanner = portScanner;
+        _fingerprinter = fingerprinter;
+        _credentialTester = credentialTester;
+        _cveLookup = cveLookup;
+        _configAuditor = configAuditor;
+        _logger = logger;
+
+        var workerCount = maxConcurrentScans > 0 ? maxConcurrentScans : DefaultMaxConcurrentScans;
+
+        // N worker loops, each processing one job at a time from the shared queue, bounds
+        // concurrent scan execution to `workerCount` regardless of how many jobs are queued.
+        for (var i = 0; i < workerCount; i++)
+            _ = RunWorkerLoopAsync();
+    }
 
     public async Task<ScanJob> StartScanAsync(ScanJob job, CancellationToken ct = default)
     {
-        // Persist the job
-        using (var scope = scopeFactory.CreateScope())
+        // Persist the job (Status defaults to Pending until a worker admits it)
+        using (var scope = _scopeFactory.CreateScope())
         {
             var repo = scope.ServiceProvider.GetRequiredService<IScanJobRepository>();
             await repo.AddAsync(job, ct);
         }
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _runningScans[job.Id] = cts;
+        _scans[job.Id] = cts;
+        _queuedJobIds[job.Id] = 0;
 
-        // Run scan in background
-        _ = Task.Run(() => ExecuteScanAsync(job.Id, cts.Token), cts.Token);
+        // Channel is unbounded, so this never blocks the caller waiting for a free slot.
+        await _queue.Writer.WriteAsync(job.Id, ct);
 
         return job;
     }
 
-    public Task CancelScanAsync(Guid scanJobId)
+    public async Task CancelScanAsync(Guid scanJobId)
     {
-        if (_runningScans.TryRemove(scanJobId, out var cts))
+        if (_queuedJobIds.TryRemove(scanJobId, out _))
+        {
+            // Still queued — remove from tracking so the worker loop skips it when it
+            // eventually dequeues the id, and mark the job cancelled directly since
+            // ExecuteScanAsync will never run for it.
+            if (_scans.TryRemove(scanJobId, out var queuedCts))
+            {
+                queuedCts.Cancel();
+                queuedCts.Dispose();
+            }
+
+            await SetJobStatusAsync(scanJobId, ScanStatus.Cancelled);
+            return;
+        }
+
+        if (_scans.TryRemove(scanJobId, out var cts))
         {
             cts.Cancel();
             cts.Dispose();
         }
-        return Task.CompletedTask;
     }
 
     public bool IsScanRunning(Guid scanJobId) =>
-        _runningScans.ContainsKey(scanJobId);
+        _scans.ContainsKey(scanJobId);
+
+    private async Task RunWorkerLoopAsync()
+    {
+        await foreach (var jobId in _queue.Reader.ReadAllAsync())
+        {
+            try
+            {
+                if (!_queuedJobIds.TryRemove(jobId, out _))
+                    continue; // cancelled while queued
+
+                if (!_scans.TryGetValue(jobId, out var cts))
+                    continue; // cancelled and fully removed already
+
+                await ExecuteScanAsync(jobId, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                // ExecuteScanAsync already handles its own exceptions; this is a last-resort
+                // guard so a single bad job can never take down a worker loop permanently.
+                _logger.LogError(ex, "Unexpected error processing queued scan {JobId}", jobId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs the actual port-scanning step. Extracted as a seam so tests can substitute a
+    /// controllable delay without touching <see cref="PortScanner"/> itself.
+    /// </summary>
+    protected virtual Task<List<ScanFinding>> ScanPortsAsync(ScanJob job, CancellationToken ct) =>
+        _portScanner.ScanAsync(job.TargetIp, job.PortRange, job.MaxConcurrency, job.TimeoutMs, ct);
 
     private async Task ExecuteScanAsync(Guid jobId, CancellationToken ct)
     {
         try
         {
-            using var scope = scopeFactory.CreateScope();
+            using var scope = _scopeFactory.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<IScanJobRepository>();
             var deviceRepo = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
 
@@ -64,11 +155,10 @@ public class ScannerService(
             job.StartedAt = DateTimeOffset.UtcNow;
             await repo.UpdateAsync(job, ct);
 
-            logger.LogInformation("Starting scan {JobId} on {Target}", jobId, job.TargetIp);
+            _logger.LogInformation("Starting scan {JobId} on {Target}", jobId, job.TargetIp);
 
             // 3.1 — Port scan
-            var openPorts = await portScanner.ScanAsync(
-                job.TargetIp, job.PortRange, job.MaxConcurrency, job.TimeoutMs, ct);
+            var openPorts = await ScanPortsAsync(job, ct);
 
             foreach (var finding in openPorts)
                 finding.ScanJobId = jobId;
@@ -78,7 +168,7 @@ public class ScannerService(
             List<ScanFinding> fingerprints = [];
             if (job.EnableFingerprinting && openPorts.Count > 0)
             {
-                fingerprints = await fingerprinter.FingerprintAsync(
+                fingerprints = await _fingerprinter.FingerprintAsync(
                     job.TargetIp, openPorts, job.TimeoutMs, ct);
 
                 foreach (var finding in fingerprints)
@@ -89,7 +179,7 @@ public class ScannerService(
             // 3.3 — Default credential testing
             if (job.EnableCredentialTest && openPorts.Count > 0)
             {
-                var credFindings = await credentialTester.TestAsync(
+                var credFindings = await _credentialTester.TestAsync(
                     job.TargetIp, openPorts, job.TimeoutMs, ct);
 
                 foreach (var finding in credFindings)
@@ -100,7 +190,7 @@ public class ScannerService(
             // 3.4 — CVE lookup
             if (job.EnableCveLookup && fingerprints.Count > 0)
             {
-                var cveFindings = await cveLookup.LookupAsync(fingerprints, ct);
+                var cveFindings = await _cveLookup.LookupAsync(fingerprints, ct);
                 foreach (var finding in cveFindings)
                     finding.ScanJobId = jobId;
                 await repo.AddFindingsAsync(cveFindings, ct);
@@ -109,7 +199,7 @@ public class ScannerService(
             // 3.5 — Config audit
             if (job.EnableConfigAudit && openPorts.Count > 0)
             {
-                var configFindings = await configAuditor.AuditAsync(
+                var configFindings = await _configAuditor.AuditAsync(
                     job.TargetIp, openPorts, job.TimeoutMs, ct);
 
                 foreach (var finding in configFindings)
@@ -130,21 +220,21 @@ public class ScannerService(
             // Update device security score
             await UpdateSecurityScoreAsync(job, allFindings, deviceRepo, ct);
 
-            logger.LogInformation("Scan {JobId} completed: {Count} findings", jobId, job.TotalFindings);
+            _logger.LogInformation("Scan {JobId} completed: {Count} findings", jobId, job.TotalFindings);
         }
         catch (OperationCanceledException)
         {
             await SetJobStatusAsync(jobId, ScanStatus.Cancelled);
-            logger.LogInformation("Scan {JobId} was cancelled", jobId);
+            _logger.LogInformation("Scan {JobId} was cancelled", jobId);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Scan {JobId} failed", jobId);
+            _logger.LogError(ex, "Scan {JobId} failed", jobId);
             await SetJobStatusAsync(jobId, ScanStatus.Failed, ex.Message);
         }
         finally
         {
-            if (_runningScans.TryRemove(jobId, out var cts))
+            if (_scans.TryRemove(jobId, out var cts))
                 cts.Dispose();
         }
     }
@@ -153,7 +243,7 @@ public class ScannerService(
     {
         try
         {
-            using var scope = scopeFactory.CreateScope();
+            using var scope = _scopeFactory.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<IScanJobRepository>();
             var job = await repo.GetByIdAsync(jobId);
             if (job is null) return;
@@ -165,7 +255,7 @@ public class ScannerService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to update scan job {JobId} status to {Status}", jobId, status);
+            _logger.LogError(ex, "Failed to update scan job {JobId} status to {Status}", jobId, status);
         }
     }
 
