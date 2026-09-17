@@ -8,7 +8,7 @@ This document tracks remaining gaps, known limitations, and technical debt. Item
 
 | Gap | Description | Severity | Status | Notes |
 |---|---|---|---|---|
-| No LDAP / SAML SSO | Enterprise single sign-on not implemented | Low | Open | Deprioritized in Phase 16.5; tracked as the live backlog item [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) #59 (SSO/OIDC) — see that doc for current prioritization, not this one |
+| No LDAP / SAML SSO | Enterprise single sign-on not implemented | Low | Open | Deprioritized in Phase 16.5; deliberately deferred as [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) #59 (SSO/OIDC) — see that doc's rationale before picking this up |
 | No distributed / multi-node mode | Single-instance proxy per deployment; horizontal scaling requires Redis backplane | Low | Open | Deprioritized in Phase 16.8; see Design Assumptions |
 | No Bluetooth/Zigbee/Z-Wave | IoT protocols beyond IP-based networking are not supported | Low | Open | See Phase 17 for future work |
 | Dashboard layout persistence | Per-user saved layout/filter presets with full CRUD; DB model, repo, and API all implemented; zero frontend exposure | Low | Open | Backend: `GET/POST/PUT/DELETE /api/dashboard/layouts` |
@@ -113,7 +113,7 @@ All previously open items resolved — see Resolved Items below.
 
 ## Suggestions for Next Contributors
 
-Frontend component test coverage (manipulation, capture, sessions panels, and more) shipped in Gaps Batch 4 and after — see "Resolved Items" below. For current suggestions, check [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)'s "Recommended next PRs" section, which is the live backlog board.
+Frontend component test coverage (manipulation, capture, sessions panels, and more) shipped in Gaps Batch 4 and after — see "Resolved Items" below. [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) is fully closed as of 2026-09-17 — its three deliberately-deferred items (#48 per-user data isolation, #56 project/workspace concept, #59 SSO/OIDC) are the main open questions carried forward from that review; this file's own tables above are the place to check for anything else.
 
 See [AGENT-NOTES.md](AGENT-NOTES.md) for session setup and testing instructions.
 

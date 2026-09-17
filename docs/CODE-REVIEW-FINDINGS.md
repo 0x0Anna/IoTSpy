@@ -1,25 +1,20 @@
-# Code Review Findings — Status & Remaining Work
+# Code Review Findings — Archived (Closed Out)
 
-Original review: 2026-05-09. This file is the **live status board** for the multi-angle review (backend correctness/security, frontend code & responsive UX, documentation accuracy, feature/use-case gaps). Items move from "Remaining" to "Completed" as PRs merge.
-
-When picking up new work, consult the **Recommended next PRs** section at the bottom.
+**Status: closed 2026-09-17.** This was the live status board for a multi-angle review opened 2026-05-09 (backend correctness/security, frontend code & responsive UX, documentation accuracy, feature/use-case gaps). Every item is now either **Completed** or **Deliberately deferred** with recorded rationale — nothing remains open. Kept in place (not moved to `docs/archive/`) since it's linked from `CLAUDE.md`, `AGENT.md`, and several ADRs/PRs by its current path; treat it as a historical record, not a board to keep triaging against.
 
 Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medium** = should-have · **Low** = nice-to-have.
 
 ---
 
-## Status snapshot (2026-05-09 → present)
+## Final status (2026-05-09 → 2026-09-17)
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 52 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47, #49, #50, #55, #57 |
-| ⏳ In-flight (open PR) | 0 | — |
-| 🟥 Critical remaining | 0 | — |
-| 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 1 | #48 |
-| 🟩 Low remaining | 7 | #51–#54, #56, #58, #59 |
+| ✅ Completed | 56 | #1–#47, #49–#55, #57–#58 (see below; #56 and #59 deferred, not completed) |
+| 🚫 Deliberately deferred | 3 | #48, #56, #59 — each investigated and documented, not built |
+| Remaining | 0 | — |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43), **#89/#90/#91/#92** (protocol coverage #44 — one PR per protocol: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT detection), **feature/protocol-message-persistence** + **feature/report-redesign-scriban** (report redesign #33 — persistence infrastructure then Scriban-templated device/session reports).
+PR history: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43), **#89/#90/#91/#92** (protocol coverage #44 — one PR per protocol: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT detection), **feature/protocol-message-persistence** + **feature/report-redesign-scriban** (report redesign #33 — persistence infrastructure then Scriban-templated device/session reports), **#97** (OTEL tracing #51), **#98** (Prometheus metrics + Grafana dashboards #52, #53), **#99** (scheduled-scan target lists #58), **#96** (on-call runbook #54).
 
 ---
 
@@ -31,29 +26,15 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 
 ---
 
-## 🟨 Medium — remaining
+## 🚫 Deliberately deferred (not completed — recorded rationale)
 
-### Trust & safety
+These three items were investigated and intentionally not built, each because the "correct" implementation depends on a product/architecture decision rather than an engineering one. Revisit only alongside a real product conversation, not by folding into an unrelated PR.
 
-**48. No per-user data isolation** — Viewer-role users see all captures/scans across the instance. For shared-instance deployments this leaks data. Add row-level ownership filter on capture/scan/device queries. Touches many controllers; bundle as a single multi-controller PR.
+**48. No per-user data isolation** — Viewer-role users see all captures/scans across the instance. Deferred rather than built: `Device`/`CapturedRequest`/`ScanJob` have no owner/creator field today, and only `Operator`/`Admin` roles can create scans or sessions in the first place (`Viewer` is inherently read-only), so "isolate a Viewer's own data" has no obvious referent — devices are physical network infrastructure, not user-owned records, and retrofitting ownership onto auto-discovered devices is semantically fuzzy (who "owns" a device the proxy passively observed?). The existing `InvestigationSession` `createdByUserId`/`createdByMe` pattern already provides session-level scoping for the one place per-user attribution genuinely applies. Building row-level ownership on `Device`/`ScanJob` without first deciding what "own" means for those entities risked shipping the wrong model. Needs a product decision on the ownership semantics before an engineering PR makes sense.
 
----
+**56. Project/workspace concept absent** — no aggregate over Device + Session + ScanJob to namespace per-engagement artifacts. Investigated in `feature/replay-override-cvss-tests`: none of `Device`/`ScanJob`/`InvestigationSession` share so much as a tag field today; `InvestigationSession` only aggregates captures/annotations/activity, never `Device` or `ScanJob`. A full implementation needs either a new `Project` entity with FKs into all three, or retrofitting `InvestigationSession` — either way touching ~14 existing `DeviceId`-keyed call sites across ~5 controllers and 3 repositories, plus multiple migrations. A cheap `Tags`/`ProjectLabel` field was considered as a partial step but rejected as not actually satisfying the ask. Re-affirmed as deferred on 2026-09-17 rather than built now — still worth its own design discussion, not a bundled PR.
 
-## 🟩 Low — remaining
-
-**51. OpenTelemetry tracing absent** — Serilog only. For multi-container deployments, cross-service trace correlation is missing.
-
-**52. Prometheus metric surface thin** — 6 metrics. Missing: breakpoint hits, fuzzer throughput, rule match rate, per-protocol capture volume, DB query latency, SignalR connection count.
-
-**53. No bundled Grafana dashboards** despite Helm chart shipping.
-
-**54. No on-call runbook in `docs/`** — what to do when the proxy stops intercepting, how to recover from corrupt SQLite, how to rotate JWT secret without logging everyone out.
-
-**56. Project/workspace concept absent** — no aggregate over Device + Session + ScanJob to namespace per-engagement artifacts. **Deliberately deferred** (investigated in feature/replay-override-cvss-tests): none of `Device`/`ScanJob`/`InvestigationSession` share so much as a tag field today; `InvestigationSession` only aggregates captures/annotations/activity, never `Device` or `ScanJob`. A full implementation needs either a new `Project` entity with FKs into all three, or retrofitting `InvestigationSession` — either way touching ~14 existing `DeviceId`-keyed call sites across ~5 controllers and 3 repositories, plus multiple migrations. A cheap `Tags`/`ProjectLabel` field on `Device`/`ScanJob` was considered as a partial step but rejected as not actually satisfying the ask — worth its own design discussion rather than folding into another PR.
-
-**58. Scheduled scans against a target list** — `ScheduledScan` is FK'd to a single `Device`. Support tag/CIDR-based target lists.
-
-**59. SSO/OIDC** — JWT-only with local password store. Blocks enterprise adoption.
+**59. SSO/OIDC** — JWT-only with local password store, blocking enterprise adoption. Deferred rather than shipping something unverified: there's no real identity provider available in this environment or in CI to validate an OIDC integration end-to-end (authorization-code flow, JIT user provisioning, token validation against a live JWKS endpoint) — a PR that only exercises mocked token validation would ship unverified auth code, which is a worse outcome than not shipping it. It's also an enterprise-only ask with no customer request driving it yet. Revisit when either a real IdP is available for integration testing, or a customer need makes the risk worth taking.
 
 ---
 
@@ -162,23 +143,18 @@ All four branched off the same `main` commit in parallel isolated worktrees; PR 
 
 - **#33 — Report redesign** [branches: feature/protocol-message-persistence, feature/report-redesign-scriban] — `ReportService.cs` previously only loaded `ScanJob`+`ScanFinding` for a single device; not a usable pen-test deliverable. Shipped as two PRs given the scope. First landed the persistence prerequisite: `PersistedProtocolMessage` table + `IProtocolMessageRepository`, MQTT messages persisted from `MqttBrokerProxy`, DoH-decoded DNS queries persisted from both proxy servers' HTTP(S) capture sites (this also wired up `DohDetector`/`DotDetector`, shipped in #92 but never actually called from a live capture path until now). Second introduced Scriban (first templated text asset in the solution) for HTML rendering, expanded `ReportDataLoader` to aggregate captures (with parsed TLS metadata), scan findings, protocol messages, and — for session-scoped reports — annotations and the activity feed; added device- and session-scoped endpoints (`GET /api/reports/{devices,sessions}/{id}/{html,pdf}`); QuestPDF PDF path updated to match; frontend `api/reports.ts` (previously zero callers) wired into `ScannerPanel` and `SessionsPanel`. All user-controlled template fields are HTML-escaped (verified by a dedicated test), since Scriban doesn't auto-escape.
 
+### Operational observability & scheduling (5 of 5) ✅
+
+- **#54 — On-call runbook** [PR #96] — new `docs/RUNBOOK.md`: proxy-interception failures, SQLite corruption recovery, JWT secret rotation (documented plainly that there's no dual-key grace period today — rotation forces every session to re-login), root CA/cert issues, retention/disk-growth traps, SignalR degradation in multi-replica deployments, container restart/rollback. Cross-linked with `TROUBLESHOOTING.md` (dev-environment issues; this is production incident response).
+- **#51 — OpenTelemetry tracing** [PR #97] — opt-in (`Otel:Enabled`, default false — the pipeline isn't registered at all when disabled, not swapped for a no-op exporter) ASP.NET Core + HttpClient instrumentation with an OTLP exporter. EF Core instrumentation deliberately skipped (`OpenTelemetry.Instrumentation.EntityFrameworkCore` has never left beta). Serilog correlation via a new lightweight `ActivityTraceEnricher` stamping `TraceId`/`SpanId` from `Activity.Current` — chosen over `Serilog.Enrichers.Span` to avoid a new dependency.
+- **#52 / #53 — Prometheus metrics (6→12) + bundled Grafana dashboards** [PR #98] — the original 6 metrics had zero call sites anywhere in the repo before this PR (defined but never wired up). New: `iotspy_breakpoint_hits_total`, `iotspy_rule_matches_total`, `iotspy_fuzzer_requests_total`, `iotspy_captures_total`, `iotspy_db_query_duration_seconds` (new EF Core `DbCommandInterceptor`, registered once for both SQLite and Postgres), `iotspy_signalr_connections`. Split across `IoTSpy.Api`/`IoTSpy.Manipulation`/`IoTSpy.Storage` static metrics classes (all registering into prometheus-net's shared default registry) since `IoTSpy.Api` depends on the other two, not the reverse. Two Grafana dashboards under `deploy/grafana/dashboards/` (canonical) + `deploy/helm/iotspy/dashboards/` (packaged copy) wired into the Helm chart via a `grafana_dashboard: "1"`-labeled ConfigMap, gated behind `grafana.dashboards.enabled`.
+- **#58 — Scheduled scans against a target list** [PR #99] — `ScheduledScan.DeviceId` is now nullable; added `TargetCidr`/`TargetTag` (exactly one of the three required, enforced by `ScheduledScanTargetSelector`). New `Device.Tags` field (comma-separated, same convention as `CaptureAnnotation.Tags`). **Security fix bundled in**: `ScheduledScanService` previously called `IScannerService` directly, bypassing the scan-scope consent gate entirely — a scheduled scan could already reach a device outside all configured scan scopes, something a direct interactive scan would be refused for. Extracted the gate into a shared `CidrHelper.IsInScope` and applied it to both single- and multi-device schedules, with an explicit regression test. Also fixed post-review: `TargetTag`/`TargetCidr` weren't trimmed server-side, so a value with stray whitespace would validate and store successfully but silently match zero devices at fire time.
+
 ---
-
-## Recommended next PRs
-
-Updated after #33 (report redesign) landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
-
-1. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
-
-2. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
-
-3. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
-
-Each item above is sized to fit a focused PR. Avoid bundling across categories — the cleaner the diff, the easier the review.
 
 ## Verification commands
 
-After any test-adding PR, re-bump the `[Fact]/[Theory]` grep count in CLAUDE.md, AGENT.md, README.md, ARCHITECTURE.md:
+Kept for future reference — this doc is no longer an active board, but the counts it tracked are still cited in CLAUDE.md/README.md/ARCHITECTURE.md. Re-run after any future test-adding PR:
 
 ```bash
 grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l

@@ -33,9 +33,9 @@ This is the primary navigation hub for all project planning, architecture, and i
 | Metric | Value |
 |---|---|
 | **Phases complete** | 1–16, 18–22 + API & Backend Polish + Frontend Usability |
-| **Backend tests** | 1022 `[Fact]`/`[Theory]` attributes, 1099 executed (all passing, last verified 2026-09-17) |
+| **Backend tests** | 1099 `[Fact]`/`[Theory]` attributes, 1183 executed (all passing, last verified 2026-09-17) |
 | **Controllers** | 22 REST + 3 SignalR hubs |
-| **Migrations** | 28 |
+| **Migrations** | 31 |
 | **Protocols supported** | HTTP/HTTPS, MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, Telemetry |
 | **Proxy modes** | 3 (explicit, gateway, ARP spoof) |
 | **Auth** | Multi-user RBAC (Admin/Operator/Viewer) |
@@ -55,7 +55,8 @@ This is the primary navigation hub for all project planning, architecture, and i
 | **[PHASES-ROADMAP.md](PHASES-ROADMAP.md)** | Future enhancement areas (no numbered phases remaining) | Product managers, strategists | ~100 lines |
 | **[PHASES-ARCHIVED.md](PHASES-ARCHIVED.md)** | Archived / formally deprioritized phases (Phase 17) | Reference only | ~50 lines |
 | **[GAPS.md](GAPS.md)** | Known issues, API gaps, security hardening, tech debt | QA, tech leads | ~350 lines |
-| **[CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)** | Live status board for the multi-angle code review (backend, frontend, docs, gaps) | Tech leads, reviewers | ~200 lines |
+| **[CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)** | Closed/archived: the 2026-05-09 multi-angle code review, every item completed or deliberately deferred as of 2026-09-17 | Tech leads, reviewers (historical) | ~165 lines |
+| **[RUNBOOK.md](RUNBOOK.md)** | On-call incident response for production deployments | Ops, on-call engineers | ~120 lines |
 | **[DESIGN-DECISIONS.md](DESIGN-DECISIONS.md)** | Architecture decisions, naming, patterns | Architects, senior engineers | ~400 lines |
 | **[CODE-PATTERNS.md](CODE-PATTERNS.md)** | Protocol decoder patterns, common code conventions | Backend engineers | ~200 lines |
 | **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** | Common debugging scenarios and fixes | All contributors | ~150 lines |
@@ -92,6 +93,7 @@ This is the primary navigation hub for all project planning, architecture, and i
 **DevOps / Deployment**
 - Phase 16 (complete): [PHASES-COMPLETED.md](PHASES-COMPLETED.md) → "Phase 16 — Deployment & Operations"
 - Configuration: [AGENT-NOTES.md](AGENT-NOTES.md) → "Configuration Quick Reference"
+- On-call incident response: [RUNBOOK.md](RUNBOOK.md)
 
 **QA / Testing**
 - Test strategy: [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md) → "Testing Strategy"
@@ -193,4 +195,4 @@ A: See [PHASES-ROADMAP.md](PHASES-ROADMAP.md#future-enhancement-areas-phases-22)
 ---
 
 **Last updated:** September 2026  
-**Active contributors welcome** — start with [AGENT-NOTES.md](AGENT-NOTES.md), [GAPS.md](GAPS.md), and the live backlog board at [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)
+**Active contributors welcome** — start with [AGENT-NOTES.md](AGENT-NOTES.md) and [GAPS.md](GAPS.md); [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) is closed but its three deferred items are open questions worth a look

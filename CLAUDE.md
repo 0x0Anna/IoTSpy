@@ -78,14 +78,18 @@ See `.claude/skills/README.md` for full details.
 
 ## Current state
 
-All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 1044 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1121 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete. `docs/CODE-REVIEW-FINDINGS.md` is closed out — every item is either completed or deliberately deferred with recorded rationale (see that doc for the three deferred items: #48 per-user data isolation, #56 project/workspace concept, #59 SSO/OIDC).
+- 1099 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1183 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
 - 22 REST controllers, 216 endpoints
-- 29 EF Core migrations up through `AddPersistedProtocolMessages`
+- 31 EF Core migrations up through `AddScheduledScanTargetLists`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
+- OpenTelemetry tracing (opt-in), 12 Prometheus metrics with bundled Grafana dashboards, on-call runbook at `docs/RUNBOOK.md`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
+
+### Backlog closeout: OTEL, metrics/dashboards, scheduled-scan target lists (latest)
+Closed the last three open `docs/CODE-REVIEW-FINDINGS.md` items in parallel worktree PRs (#97, #98, #99) — see that doc's "Operational observability & scheduling" section for full detail. Headline: `ScheduledScanService` previously bypassed the scan-scope consent gate entirely for scheduled scans (fixed as part of #99, with an explicit regression test) — a real, pre-existing gap, not just a feature addition. #48, #56, and #59 were deliberately deferred rather than built, each requiring a product/architecture decision this session didn't have standing to make; rationale recorded in the findings doc.
 
 ### Report redesign: Scriban HTML + device/session-scoped reports (latest — closes #33)
 `docs/CODE-REVIEW-FINDINGS.md` #33 — `ReportService` previously only loaded `ScanJob`+`ScanFinding` for a single device; not a usable pen-test deliverable. Built on the persistence infrastructure from the previous PR.
