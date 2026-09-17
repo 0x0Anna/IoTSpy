@@ -43,12 +43,8 @@ public class ScannerController(
         if (device is null) return NotFound("Device not found");
 
         var activeScopes = await scanScopes.GetActiveAsync(ct);
-        if (activeScopes.Count > 0)
-        {
-            var inScope = activeScopes.Any(s => IoTSpy.Scanner.CidrHelper.Contains(s.Cidr, device.IpAddress));
-            if (!inScope)
-                return StatusCode(403, $"Device IP {device.IpAddress} is not within any active scan scope.");
-        }
+        if (!IoTSpy.Scanner.CidrHelper.IsInScope(activeScopes, device.IpAddress))
+            return StatusCode(403, $"Device IP {device.IpAddress} is not within any active scan scope.");
 
         var portRange = dto.PortRange ?? "1-1024";
         if (portRange.Length > MaxPortRangeStringLength)

@@ -11,6 +11,9 @@ public class Device
     public string Vendor { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string Notes { get; set; } = string.Empty;
+
+    /// <summary>Comma-separated tags (e.g. "camera,upstairs,vendor-x") — same convention as <see cref="CaptureAnnotation.Tags"/>.</summary>
+    public string? Tags { get; set; }
     public bool InterceptionEnabled { get; set; } = true;
     public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;

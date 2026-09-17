@@ -67,6 +67,8 @@ export interface Device {
   vendor: string
   label: string
   notes: string
+  /** Comma-separated tags (e.g. "camera,upstairs,vendor-x"). */
+  tags?: string | null
   interceptionEnabled: boolean
   firstSeen: string
   lastSeen: string
@@ -279,6 +281,7 @@ export interface SetupRequest {
 export interface DevicePatchRequest {
   label?: string
   notes?: string
+  tags?: string
   interceptionEnabled?: boolean
 }
 

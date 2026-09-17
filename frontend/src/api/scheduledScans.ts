@@ -2,23 +2,32 @@ import { apiFetch } from './client'
 
 export interface ScheduledScan {
   id: string
-  deviceId: string
+  deviceId?: string | null
+  targetCidr?: string | null
+  targetTag?: string | null
   cronExpression: string
   isEnabled: boolean
   lastRunAt?: string
   nextRunAt?: string
   lastScanJobId?: string
+  lastRunStatus?: string | null
+  lastRunError?: string | null
   createdAt: string
 }
 
 export interface CreateScheduledScanRequest {
-  deviceId: string
+  deviceId?: string
+  targetCidr?: string
+  targetTag?: string
   cronExpression?: string
 }
 
 export interface UpdateScheduledScanRequest {
   isEnabled?: boolean
   cronExpression?: string
+  deviceId?: string
+  targetCidr?: string
+  targetTag?: string
 }
 
 export function listScheduledScans(): Promise<ScheduledScan[]> {

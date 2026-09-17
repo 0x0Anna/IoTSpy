@@ -35,6 +35,7 @@ public class DevicesController(IDeviceRepository devices) : ControllerBase
 
         if (dto.Label is not null) device.Label = dto.Label;
         if (dto.Notes is not null) device.Notes = dto.Notes;
+        if (dto.Tags is not null) device.Tags = dto.Tags;
         if (dto.InterceptionEnabled.HasValue) device.InterceptionEnabled = dto.InterceptionEnabled.Value;
 
         return Ok(await devices.UpdateAsync(device));
@@ -51,5 +52,6 @@ public class DevicesController(IDeviceRepository devices) : ControllerBase
 public record DevicePatchDto(
     string? Label,
     string? Notes,
-    bool? InterceptionEnabled
+    bool? InterceptionEnabled,
+    string? Tags = null
 );

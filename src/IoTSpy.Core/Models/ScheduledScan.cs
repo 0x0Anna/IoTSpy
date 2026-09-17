@@ -5,8 +5,19 @@ namespace IoTSpy.Core.Models;
 public class ScheduledScan
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public Guid DeviceId { get; set; }
+
+    /// <summary>Single-device target. Exactly one of <see cref="DeviceId"/>, <see cref="TargetCidr"/>,
+    /// <see cref="TargetTag"/> must be set — see <see cref="Utilities.ScheduledScanTargetSelector"/>.</summary>
+    public Guid? DeviceId { get; set; }
     public Device? Device { get; set; }
+
+    /// <summary>CIDR-based target list (e.g. "10.0.0.0/24") — resolved against all known devices at fire time.</summary>
+    public string? TargetCidr { get; set; }
+
+    /// <summary>Tag-based target list — matches devices whose comma-separated <see cref="Device.Tags"/>
+    /// contains this tag (case-insensitive, same convention as <see cref="CaptureAnnotation.Tags"/>).</summary>
+    public string? TargetTag { get; set; }
+
     public string CronExpression { get; set; } = "0 * * * *"; // hourly default
     public bool IsEnabled { get; set; } = true;
     public DateTimeOffset? LastRunAt { get; set; }

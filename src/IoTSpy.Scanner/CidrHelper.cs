@@ -1,9 +1,24 @@
 using System.Net;
+using IoTSpy.Core.Models;
 
 namespace IoTSpy.Scanner;
 
 public static class CidrHelper
 {
+    /// <summary>
+    /// Returns true if <paramref name="cidr"/> is a parseable CIDR block or bare IP address.
+    /// </summary>
+    public static bool IsValidCidr(string cidr) => TryParseCidr(cidr, out _, out _);
+
+    /// <summary>
+    /// The scan-scope consent gate shared by <c>ScannerController.StartScan</c> (single-device,
+    /// interactive scans) and <c>ScheduledScanService</c> (unattended, possibly multi-device scans).
+    /// When no active scopes are configured, every device is considered in scope (unrestricted mode).
+    /// Otherwise the device's IP must fall within at least one active scope's CIDR.
+    /// </summary>
+    public static bool IsInScope(IReadOnlyCollection<ScanScope> activeScopes, string ipAddress) =>
+        activeScopes.Count == 0 || activeScopes.Any(s => Contains(s.Cidr, ipAddress));
+
     /// <summary>
     /// Returns true if <paramref name="ipString"/> falls within the <paramref name="cidr"/> block.
     /// Supports both IPv4 and IPv6. Returns false for any unparseable input.
