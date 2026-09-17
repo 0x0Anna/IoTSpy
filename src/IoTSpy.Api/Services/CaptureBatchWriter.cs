@@ -112,6 +112,9 @@ public sealed class CaptureBatchWriter : BackgroundService, ICaptureBatchWriter
             using var scope = _scopeFactory.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
             await repo.AddBatchAsync(batch, ct);
+
+            foreach (var capture in batch)
+                IoTSpyMetrics.RecordCapture(capture.Protocol.ToString());
         }
         catch (Exception ex)
         {

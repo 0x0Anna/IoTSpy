@@ -62,6 +62,8 @@ public class ManipulationService(
             if (!MatchesBreakpoint(bp, message))
                 continue;
 
+            ManipulationMetrics.RecordBreakpointHit(bp.Id);
+
             try
             {
                 var bpModified = bp.Language switch

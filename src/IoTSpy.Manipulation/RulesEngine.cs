@@ -33,6 +33,7 @@ public class RulesEngine(ILogger<RulesEngine> logger)
             if (!Matches(rule, message))
                 continue;
 
+            ManipulationMetrics.RecordRuleMatch(rule.Id);
             logger.LogDebug("Rule {RuleName} matched {Host}{Path}", rule.Name, message.Host, message.Path);
 
             var applied = await ApplyActionAsync(rule, message, phase, ct);
