@@ -13,8 +13,10 @@ namespace IoTSpy.Scanner.Reports;
 /// </summary>
 internal static class ReportDataLoader
 {
-    // A report is an overview, not an export — cap how many rows of high-volume data render.
-    private const int MaxCapturesPerReport = 200;
+    // A report is an overview, not an export — cap how many rows of high-volume data render,
+    // and apply that cap at the database level (not by fetching everything and truncating in
+    // memory), since captures in particular carry full request/response bodies.
+    private const int MaxRowsPerReportSection = 200;
 
     private static readonly ScanFindingSeverity[] SeverityOrder =
     [
@@ -39,9 +41,9 @@ internal static class ReportDataLoader
         var findings = await LoadFindingsAsync(scanJobs, jobs, ct);
 
         var deviceCaptures = await captures.GetPagedAsync(
-            new CaptureFilter(DeviceId: deviceId), page: 1, pageSize: MaxCapturesPerReport, ct);
+            new CaptureFilter(DeviceId: deviceId), page: 1, pageSize: MaxRowsPerReportSection, ct);
 
-        var messages = await protocolMessages.GetByDeviceIdAsync(deviceId, ct: ct);
+        var messages = await protocolMessages.GetByDeviceIdAsync(deviceId, limit: MaxRowsPerReportSection, ct: ct);
 
         var deviceName = device is not null ? $"{device.Label} ({device.IpAddress})" : "Unknown Device";
 
@@ -67,14 +69,13 @@ internal static class ReportDataLoader
         var activities = scope.ServiceProvider.GetRequiredService<ISessionActivityRepository>();
 
         var session = await sessions.GetByIdAsync(sessionId, ct);
-        var sessionCaptures = await sessions.GetSessionCapturesAsync(sessionId, ct);
+        var sessionCaptures = await sessions.GetSessionCapturesAsync(sessionId, limit: MaxRowsPerReportSection, ct: ct);
 
         var captures = sessionCaptures
             .Select(sc => sc.Capture)
             .Where(c => c is not null)
             .Cast<CapturedRequest>()
             .OrderByDescending(c => c.Timestamp)
-            .Take(MaxCapturesPerReport)
             .ToList();
 
         var deviceIds = captures.Where(c => c.DeviceId.HasValue).Select(c => c.DeviceId!.Value).Distinct().ToList();
@@ -85,7 +86,7 @@ internal static class ReportDataLoader
 
         var findings = await LoadFindingsAsync(scanJobs, jobs, ct);
         var messages = deviceIds.Count > 0
-            ? await protocolMessages.GetByDeviceIdsAsync(deviceIds, ct: ct)
+            ? await protocolMessages.GetByDeviceIdsAsync(deviceIds, limit: MaxRowsPerReportSection, ct: ct)
             : [];
 
         return new ReportData

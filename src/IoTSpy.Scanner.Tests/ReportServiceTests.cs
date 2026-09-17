@@ -49,16 +49,16 @@ public class ReportServiceTests
 
         var protocolMessageRepo = new Mock<IProtocolMessageRepository>();
         protocolMessageRepo.Setup(r => r.GetByDeviceIdAsync(
-                It.IsAny<Guid>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<Guid>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(protocolMessages);
         protocolMessageRepo.Setup(r => r.GetByDeviceIdsAsync(
-                It.IsAny<IEnumerable<Guid>>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<IEnumerable<Guid>>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(protocolMessages);
 
         var sessionRepo = new Mock<IInvestigationSessionRepository>();
         sessionRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
                    .ReturnsAsync(session);
-        sessionRepo.Setup(r => r.GetSessionCapturesAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        sessionRepo.Setup(r => r.GetSessionCapturesAsync(It.IsAny<Guid>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
                    .ReturnsAsync(sessionCaptures);
 
         var annotationRepo = new Mock<ICaptureAnnotationRepository>();
@@ -189,6 +189,75 @@ public class ReportServiceTests
     }
 
     [Fact]
+    public async Task GenerateDeviceHtmlReport_MalformedTlsMetadataJson_DoesNotThrow()
+    {
+        var device = MakeDevice();
+        var captures = new List<CapturedRequest>
+        {
+            new() { Id = Guid.NewGuid(), DeviceId = device.Id, Host = "iot.example.com", IsTls = true, TlsMetadataJson = "{not valid json" }
+        };
+
+        var scopeFactory = BuildScopeFactory(device, [], [], captures: captures);
+        var service = new ReportService(scopeFactory, NullLogger<ReportService>.Instance);
+
+        var bytes = await service.GenerateDeviceHtmlReportAsync(device.Id, TestContext.Current.CancellationToken);
+        var html = Encoding.UTF8.GetString(bytes);
+
+        Assert.Contains("iot.example.com", html);
+    }
+
+    [Fact]
+    public async Task GenerateDeviceHtmlReport_LikelyDotCapture_ShowsWarningFlag()
+    {
+        var device = MakeDevice();
+        var tlsJson = System.Text.Json.JsonSerializer.Serialize(new TlsMetadata { IsLikelyDot = true });
+        var captures = new List<CapturedRequest>
+        {
+            new() { Id = Guid.NewGuid(), DeviceId = device.Id, Host = "resolver.example.com", IsTls = true, TlsMetadataJson = tlsJson }
+        };
+
+        var scopeFactory = BuildScopeFactory(device, [], [], captures: captures);
+        var service = new ReportService(scopeFactory, NullLogger<ReportService>.Instance);
+
+        var bytes = await service.GenerateDeviceHtmlReportAsync(device.Id, TestContext.Current.CancellationToken);
+        var html = Encoding.UTF8.GetString(bytes);
+
+        Assert.Contains("likely DoT", html);
+    }
+
+    [Fact]
+    public async Task GenerateDeviceHtmlReport_RequestsCapturesAndMessagesWithReportCap()
+    {
+        var device = MakeDevice();
+        var captureRepo = new Mock<ICaptureRepository>();
+        captureRepo.Setup(r => r.GetPagedAsync(It.IsAny<CaptureFilter>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var protocolMessageRepo = new Mock<IProtocolMessageRepository>();
+        protocolMessageRepo.Setup(r => r.GetByDeviceIdAsync(
+                It.IsAny<Guid>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var deviceRepo = new Mock<IDeviceRepository>();
+        deviceRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(device);
+        var scanJobRepo = new Mock<IScanJobRepository>();
+        scanJobRepo.Setup(r => r.GetByDeviceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(deviceRepo.Object);
+        services.AddSingleton(scanJobRepo.Object);
+        services.AddSingleton(captureRepo.Object);
+        services.AddSingleton(protocolMessageRepo.Object);
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        var service = new ReportService(scopeFactory, NullLogger<ReportService>.Instance);
+        await service.GenerateDeviceHtmlReportAsync(device.Id, TestContext.Current.CancellationToken);
+
+        captureRepo.Verify(r => r.GetPagedAsync(It.IsAny<CaptureFilter>(), 1, 200, It.IsAny<CancellationToken>()), Times.Once);
+        protocolMessageRepo.Verify(r => r.GetByDeviceIdAsync(
+            device.Id, null, null, 200, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task GenerateDevicePdfReport_ReturnsBytesStartingWithPdfMagic()
     {
         var device = MakeDevice();
@@ -245,6 +314,52 @@ public class ReportServiceTests
         Assert.Contains("Looks suspicious", html);
         Assert.Contains("started scan", html);
         Assert.Contains("iot.example.com", html);
+        Assert.Contains("<span class=\"tag\">suspicious</span>", html);
+        Assert.Contains("<span class=\"tag\">pii</span>", html);
+    }
+
+    [Fact]
+    public async Task GenerateSessionHtmlReport_RequestsSessionCapturesAndMessagesWithReportCap()
+    {
+        var session = new InvestigationSession { Id = Guid.NewGuid(), Name = "Capped Session" };
+        var deviceId = Guid.NewGuid();
+        var capture = new CapturedRequest { Id = Guid.NewGuid(), DeviceId = deviceId, Host = "iot.example.com" };
+        var sessionCaptures = new List<SessionCapture>
+        {
+            new() { SessionId = session.Id, CaptureId = capture.Id, Capture = capture }
+        };
+
+        var sessionRepo = new Mock<IInvestigationSessionRepository>();
+        sessionRepo.Setup(r => r.GetByIdAsync(session.Id, It.IsAny<CancellationToken>())).ReturnsAsync(session);
+        sessionRepo.Setup(r => r.GetSessionCapturesAsync(session.Id, It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                   .ReturnsAsync(sessionCaptures);
+
+        var protocolMessageRepo = new Mock<IProtocolMessageRepository>();
+        protocolMessageRepo.Setup(r => r.GetByDeviceIdsAsync(
+                It.IsAny<IEnumerable<Guid>>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var scanJobRepo = new Mock<IScanJobRepository>();
+        scanJobRepo.Setup(r => r.GetByDeviceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var annotationRepo = new Mock<ICaptureAnnotationRepository>();
+        annotationRepo.Setup(r => r.GetBySessionAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var activityRepo = new Mock<ISessionActivityRepository>();
+        activityRepo.Setup(r => r.GetBySessionAsync(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(sessionRepo.Object);
+        services.AddSingleton(scanJobRepo.Object);
+        services.AddSingleton(protocolMessageRepo.Object);
+        services.AddSingleton(annotationRepo.Object);
+        services.AddSingleton(activityRepo.Object);
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        var service = new ReportService(scopeFactory, NullLogger<ReportService>.Instance);
+        await service.GenerateSessionHtmlReportAsync(session.Id, TestContext.Current.CancellationToken);
+
+        sessionRepo.Verify(r => r.GetSessionCapturesAsync(session.Id, 200, It.IsAny<CancellationToken>()), Times.Once);
+        protocolMessageRepo.Verify(r => r.GetByDeviceIdsAsync(
+            It.Is<IEnumerable<Guid>>(ids => ids.Contains(deviceId)), null, null, 200, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

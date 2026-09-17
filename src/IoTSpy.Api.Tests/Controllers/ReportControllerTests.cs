@@ -50,6 +50,20 @@ public class ReportControllerTests
     }
 
     [Fact]
+    public async Task GetDevicePdfReport_KnownDevice_ReturnsPdfFile()
+    {
+        var device = new Device { Id = Guid.NewGuid() };
+        _devices.GetByIdAsync(device.Id, Arg.Any<CancellationToken>()).Returns(device);
+        _reportService.GenerateDevicePdfReportAsync(device.Id, Arg.Any<CancellationToken>())
+            .Returns([0x25, 0x50, 0x44, 0x46]);
+
+        var result = await CreateController().GetDevicePdfReport(device.Id, CancellationToken.None);
+
+        var file = Assert.IsType<FileContentResult>(result);
+        Assert.Equal("application/pdf", file.ContentType);
+    }
+
+    [Fact]
     public async Task GetSessionHtmlReport_UnknownSession_ReturnsNotFound()
     {
         _sessions.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((InvestigationSession?)null);

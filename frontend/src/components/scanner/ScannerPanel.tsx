@@ -176,10 +176,27 @@ export default function ScannerPanel() {
           >
             {scanning ? 'Starting...' : 'Start Scan'}
           </button>
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={() => handleReport(formDeviceId, 'html')}
+            disabled={!formDeviceId}
+            title="Generate a report for the selected device (captures, protocol messages, and any scan findings on record)"
+          >
+            Report (HTML)
+          </button>
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={() => handleReport(formDeviceId, 'pdf')}
+            disabled={!formDeviceId}
+            title="Generate a report for the selected device (captures, protocol messages, and any scan findings on record)"
+          >
+            Report (PDF)
+          </button>
         </div>
       </div>
 
       {error && <div className="scan-error">{error}</div>}
+      {reportError && <div className="scan-error">{reportError}</div>}
 
       {/* Main content: job list + findings detail */}
       <div className="scanner-panel__body">
