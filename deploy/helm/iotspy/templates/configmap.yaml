@@ -15,6 +15,11 @@ data:
   {{- if .Values.frontend.origin }}
   Frontend__Origin: {{ .Values.frontend.origin | quote }}
   {{- end }}
+  Otel__Enabled: {{ .Values.otel.enabled | quote }}
+  {{- if .Values.otel.enabled }}
+  Otel__ServiceName: {{ .Values.otel.serviceName | quote }}
+  Otel__OtlpEndpoint: {{ .Values.otel.otlpEndpoint | quote }}
+  {{- end }}
   Alerting__Enabled: {{ .Values.alerting.enabled | quote }}
   {{- if .Values.alerting.slack.webhookUrl }}
   Alerting__Slack__WebhookUrl: {{ .Values.alerting.slack.webhookUrl | quote }}

@@ -38,6 +38,13 @@ services:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=iotspy;Username=iotspy;Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       - Frontend__Origin=https://${IOTSPY_DOMAIN:?IOTSPY_DOMAIN must be set}
       - ASPNETCORE_ENVIRONMENT=Production
+      # ── OpenTelemetry tracing (backlog #51, opt-in) ─────────────────────────
+      # Uncomment once an OTLP collector (Tempo, Jaeger, the Otel Collector, etc.)
+      # is reachable from this network. Left disabled by default so existing
+      # deployments aren't forced to stand up a collector.
+      # - Otel__Enabled=true
+      # - Otel__ServiceName=IoTSpy.Api
+      # - Otel__OtlpEndpoint=http://otel-collector:4317
     volumes:
       - iotspy-data:/data
     depends_on:
