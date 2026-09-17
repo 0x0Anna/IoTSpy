@@ -4,6 +4,7 @@ import AppShell from '../components/layout/AppShell'
 import Header from '../components/layout/Header'
 import DatabaseTab from '../components/admin/DatabaseTab'
 import CertificatesTab from '../components/admin/CertificatesTab'
+import NetworkTab from '../components/admin/NetworkTab'
 import AuditLogTab from '../components/admin/AuditLogTab'
 import UsersTab from '../components/admin/UsersTab'
 import ApiKeysTab from '../components/admin/ApiKeysTab'
@@ -14,11 +15,12 @@ import { useProxy } from '../hooks/useProxy'
 import { useTheme } from '../hooks/useTheme'
 import '../styles/admin.css'
 
-type AdminTab = 'database' | 'certificates' | 'audit' | 'users' | 'apikeys' | 'plugins' | 'scopes'
+type AdminTab = 'database' | 'certificates' | 'network' | 'audit' | 'users' | 'apikeys' | 'plugins' | 'scopes'
 
 const TABS: { key: AdminTab; label: string }[] = [
   { key: 'database', label: 'Database' },
   { key: 'certificates', label: 'Certificates' },
+  { key: 'network', label: 'Network' },
   { key: 'audit', label: 'Audit Log' },
   { key: 'users', label: 'Users' },
   { key: 'apikeys', label: 'API Keys' },
@@ -76,6 +78,7 @@ export default function AdminPage() {
         <div className="admin-content">
           {activeTab === 'database' && <DatabaseTab />}
           {activeTab === 'certificates' && <CertificatesTab />}
+          {activeTab === 'network' && <NetworkTab />}
           {activeTab === 'audit' && <AuditLogTab />}
           {activeTab === 'users' && <UsersTab currentUsername={currentUser.username} />}
           {activeTab === 'apikeys' && <ApiKeysTab />}
