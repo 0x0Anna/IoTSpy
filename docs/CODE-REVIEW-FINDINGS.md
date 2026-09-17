@@ -36,6 +36,7 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 ### Incomplete shipped features
 
 **33. Report covers scan findings only** — `ReportService.cs:50` only loads `ScanJob` + `ScanFinding`. No captures, TLS metadata, annotations, MQTT/DNS messages. Not a usable pen-test deliverable. Redesign report sections + template system.
+  - *Status: persistence prerequisite landed on `feature/protocol-message-persistence`* — new `PersistedProtocolMessage` table + `IProtocolMessageRepository`, MQTT messages persisted from `MqttBrokerProxy` (device-resolved, batched via bounded channel), DoH-decoded DNS queries persisted from both proxy servers' real HTTP(S) capture sites (this also wired up `DohDetector`/`DotDetector`, which had shipped in #92 but were never actually called from a live capture path), plus a `ProtocolMessageRetentionDays` tier. #33 itself is **not** closed by this — the report redesign (Scriban templates, device + session scoped endpoints, QuestPDF update, frontend wiring) is a separate follow-up PR that can now proceed since the data it needs exists.
 
 ### Trust & safety
 

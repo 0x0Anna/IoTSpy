@@ -9,6 +9,7 @@ interface RetentionSettings {
   packetRetentionDays: number
   scanJobRetentionDays: number
   openRtbEventRetentionDays: number
+  protocolMessageRetentionDays: number
   auditRetentionDays: number
   auditArchivePurgeDays: number
   runIntervalHours: number
@@ -183,6 +184,7 @@ export default function DatabaseTab() {
                 ['Packets TTL', 'packetRetentionDays', 1, 365] as const,
                 ['Scan Jobs TTL', 'scanJobRetentionDays', 1, 730] as const,
                 ['OpenRTB Events TTL', 'openRtbEventRetentionDays', 1, 365] as const,
+                ['Protocol Messages TTL', 'protocolMessageRetentionDays', 1, 365] as const,
                 ['Audit Archive TTL', 'auditRetentionDays', 0, 730] as const,
                 ['Audit Purge TTL', 'auditArchivePurgeDays', 0, 3650] as const,
               ] as const).map(([label, field, min, max]) => (

@@ -1,3 +1,5 @@
+using IoTSpy.Core.Enums;
+using IoTSpy.Core.Models;
 using IoTSpy.Core.Utilities;
 using IoTSpy.Protocols.Dns;
 
@@ -10,8 +12,7 @@ namespace IoTSpy.Protocols.Doh;
 /// <c>WebSocketDecoder.DetectSubProtocol</c> — this is not a standalone protocol decoder.
 /// </summary>
 public static class DohDetector
-{
-    private const string DnsMessageContentType = "application/dns-message";
+{    private const string DnsMessageContentType = "application/dns-message";
     private const string DnsQueryPath = "/dns-query";
 
     private static readonly DnsDecoder Decoder = new();
@@ -135,6 +136,38 @@ public static class DohDetector
         {
             return null;
         }
+    }
+
+    // Matches PersistedProtocolMessage.Summary's DB column (HasMaxLength(256)) — DnsMessage's
+    // own ToString() is always well under this in practice, but a query name can in theory
+    // approach the DNS spec's 253-char label limit, so cap defensively rather than trust it.
+    private const int SummaryMaxLength = 256;
+
+    /// <summary>
+    /// Projects a positive detection into a <see cref="PersistedProtocolMessage"/> for report
+    /// history. Returns null when the framing wasn't recognized as DoH at all — a detected-
+    /// but-undecodable message (<see cref="DohDetectionResult.Query"/> null) is still worth
+    /// persisting with a generic summary, since the framing itself is the useful signal.
+    /// </summary>
+    public static PersistedProtocolMessage? TryBuildPersistedMessage(
+        DohDetectionResult result, Guid? deviceId, DateTimeOffset timestamp)
+    {
+        if (!result.IsDoh) return null;
+
+        var summary = result.Query?.ToString() is { Length: > 0 } s
+            ? s
+            : "DoH framing detected (embedded DNS message could not be decoded)";
+
+        return new PersistedProtocolMessage
+        {
+            DeviceId = deviceId,
+            Protocol = InterceptionProtocol.Dns,
+            Direction = result.Query?.IsResponse == true ? "response" : "query",
+            Subject = result.Query?.Questions.Count > 0 ? result.Query.Questions[0].Name : null,
+            Summary = summary.Length > SummaryMaxLength ? summary[..SummaryMaxLength] : summary,
+            PayloadPreview = null, // DNS wire format isn't human-readable; the summary carries the signal
+            Timestamp = timestamp
+        };
     }
 }
 

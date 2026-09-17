@@ -79,15 +79,25 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 1022 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1099 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 1032 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1109 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
 - 22 REST controllers, 214 endpoints
-- 28 EF Core migrations up through `AddAlertOnMatch`
+- 29 EF Core migrations up through `AddPersistedProtocolMessages`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### Protocol coverage: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT (latest)
+### Protocol-message persistence: MQTT + DoH-DNS, DoT flag (latest — #33 prerequisite)
+Infrastructure PR for `docs/CODE-REVIEW-FINDINGS.md` #33 (report redesign) — persists what was previously decoded live and discarded, so a follow-up report PR can surface it. Not the report redesign itself.
+- New `PersistedProtocolMessage` table (migration `AddPersistedProtocolMessages`) — flat, truncated projection (no raw bytes), indexed on `Timestamp`/`DeviceId`/`Protocol`, mirroring `CapturedPacket`'s "no FK cascade" convention
+- `ProtocolMessageBatchWriter`/`IProtocolMessageWriter` — bounded-channel, drop-oldest, batched persistence mirroring `CaptureBatchWriter` exactly; avoids one DB write per decoded message on the proxy hot path
+- MQTT (`MqttBrokerProxy`): resolves `DeviceId` from client IP once per connection (not per message), persists every filter-matching message alongside the existing SignalR publish
+- DNS: there is no live raw-DNS-over-UDP proxy in this codebase — the only DNS decoding in production is `DohDetector` (DNS-over-HTTPS, RFC 8484), which was itself never wired into the live HTTP capture path despite shipping in a prior PR (#92) — only exercised by its own tests. Wired it into both `ExplicitProxyServer`/`TransparentProxyServer`'s real HTTP(S) capture sites now; `DohDetector.TryBuildPersistedMessage` decodes the embedded DNS query via the existing `DnsDecoder`
+- Bonus fix in the same touched code: `DotDetector` (DNS-over-TLS heuristic, also shipped in #92, also never wired anywhere) is now called at the TLS-passthrough capture sites in both proxy servers, setting a new `TlsMetadata.IsLikelyDot` flag
+- New `ProtocolMessageRetentionDays` tier in `DataRetentionService`/`DatabaseTab.tsx`
+- Known gap: no unit tests for `MqttBrokerProxy`'s wiring itself (no test harness exists for this class — network-hot-path proxy classes in this codebase are untested at that level generally); covered instead at the levels that are testable (repository, retention, `DohDetector.TryBuildPersistedMessage`)
+
+### Protocol coverage: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT (previous)
 `docs/CODE-REVIEW-FINDINGS.md` #44, shipped as four independent decoder-only PRs (#89-#92), one per protocol — no new live-intercepting proxy/listener for any of them:
 - RTSP/RTP (#89): `RtspDecoder` (RFC 2326) + `SdpInfo` (lightweight RFC 4566 parser) + `RtpDecoder` (RFC 3550 §5.1, unwraps RTSP's `$`-interleaved framing)
 - AMQP 1.0 (#90): `AmqpDecoder` — protocol-header handshake + all 9 performative types by descriptor code, headline-field extraction for `open`/`transfer`, generic type-width walker skips unsupported encodings

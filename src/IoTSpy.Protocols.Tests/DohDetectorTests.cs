@@ -1,3 +1,4 @@
+using IoTSpy.Core.Enums;
 using IoTSpy.Protocols.Doh;
 using Xunit;
 
@@ -112,5 +113,63 @@ public class DohDetectorTests
         var result = DohDetector.TryDetect("GET", null, null, (byte[]?)null);
 
         Assert.False(result.IsDoh);
+    }
+
+    // ── TryBuildPersistedMessage ─────────────────────────────────────────────
+
+    [Fact]
+    public void TryBuildPersistedMessage_NotDoh_ReturnsNull()
+    {
+        var result = DohDetector.TryDetect("GET", "/api/v1/things", null, (byte[]?)null);
+
+        var message = DohDetector.TryBuildPersistedMessage(result, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        Assert.Null(message);
+    }
+
+    [Fact]
+    public void TryBuildPersistedMessage_DecodedQuery_PopulatesSubjectAndSummary()
+    {
+        var dnsBytes = BuildDnsQuery();
+        var encoded = ToBase64Url(dnsBytes);
+        var result = DohDetector.TryDetect("GET", $"/dns-query?dns={encoded}", headersRaw: null, body: (byte[]?)null);
+        var deviceId = Guid.NewGuid();
+        var timestamp = DateTimeOffset.UtcNow;
+
+        var message = DohDetector.TryBuildPersistedMessage(result, deviceId, timestamp);
+
+        Assert.NotNull(message);
+        Assert.Equal(deviceId, message!.DeviceId);
+        Assert.Equal(InterceptionProtocol.Dns, message.Protocol);
+        Assert.Equal("query", message.Direction);
+        Assert.Equal("example.com", message.Subject);
+        Assert.Contains("example.com", message.Summary);
+        Assert.Equal(timestamp, message.Timestamp);
+    }
+
+    [Fact]
+    public void TryBuildPersistedMessage_DetectedButUndecodable_StillPersistsWithGenericSummary()
+    {
+        var result = DohDetector.TryDetect("GET", "/dns-query?dns=not-valid-base64!!!", headersRaw: null, body: (byte[]?)null);
+
+        var message = DohDetector.TryBuildPersistedMessage(result, null, DateTimeOffset.UtcNow);
+
+        Assert.NotNull(message);
+        Assert.Null(message!.DeviceId);
+        Assert.Null(message.Subject);
+        Assert.False(string.IsNullOrEmpty(message.Summary));
+    }
+
+    [Fact]
+    public void TryBuildPersistedMessage_NullDeviceId_IsAllowed()
+    {
+        var dnsBytes = BuildDnsQuery();
+        var encoded = ToBase64Url(dnsBytes);
+        var result = DohDetector.TryDetect("GET", $"/dns-query?dns={encoded}", headersRaw: null, body: (byte[]?)null);
+
+        var message = DohDetector.TryBuildPersistedMessage(result, null, DateTimeOffset.UtcNow);
+
+        Assert.NotNull(message);
+        Assert.Null(message!.DeviceId);
     }
 }

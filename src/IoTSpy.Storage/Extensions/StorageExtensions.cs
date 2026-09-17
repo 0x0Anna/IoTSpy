@@ -32,6 +32,7 @@ public static class StorageExtensions
 
         services.AddScoped<IDeviceRepository, DeviceRepository>();
         services.AddScoped<ICaptureRepository, CaptureRepository>();
+        services.AddScoped<IProtocolMessageRepository, ProtocolMessageRepository>();
         services.AddScoped<ICertificateRepository, CertificateRepository>();
         services.AddScoped<IProxySettingsRepository, ProxySettingsRepository>();
         services.AddScoped<IScanJobRepository, ScanJobRepository>();

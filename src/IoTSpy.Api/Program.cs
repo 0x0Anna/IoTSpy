@@ -154,6 +154,8 @@ if (redisOptions.IsConfigured && redisOptions.EnableSignalRBackplane)
 builder.Services.AddSingleton<ICapturePublisher, SignalRCapturePublisher>();
 builder.Services.AddSingleton<ICaptureBatchWriter, CaptureBatchWriter>();
 builder.Services.AddHostedService(sp => (CaptureBatchWriter)sp.GetRequiredService<ICaptureBatchWriter>());
+builder.Services.AddSingleton<IProtocolMessageWriter, ProtocolMessageBatchWriter>();
+builder.Services.AddHostedService(sp => (ProtocolMessageBatchWriter)sp.GetRequiredService<IProtocolMessageWriter>());
 builder.Services.AddSingleton<IPacketCapturePublisher, SignalRPacketPublisher>();
 builder.Services.AddSingleton<IAnomalyAlertPublisher, SignalRAnomalyPublisher>();
 builder.Services.AddSingleton<CollaborationPublisher>();

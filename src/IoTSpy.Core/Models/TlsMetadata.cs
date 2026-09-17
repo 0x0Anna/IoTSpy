@@ -33,4 +33,8 @@ public class TlsMetadata
     // Traffic stats
     public long ClientToServerBytes { get; set; }
     public long ServerToClientBytes { get; set; }
+
+    /// <summary>Heuristically flagged as DNS-over-TLS (port 853 or a known-resolver SNI) by
+    /// <c>IoTSpy.Proxy.Tls.DotDetector</c>. See that type for the detection rationale.</summary>
+    public bool IsLikelyDot { get; set; }
 }

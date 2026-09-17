@@ -102,6 +102,17 @@ public class DataRetentionService(
                 logger.LogInformation("Deleted {Count} OpenRTB events older than {Cutoff}", deleted, cutoff);
         }
 
+        if (opts.ProtocolMessageRetentionDays > 0)
+        {
+            var cutoff = now.AddDays(-opts.ProtocolMessageRetentionDays);
+            var deleted = await db.ProtocolMessages
+                .Where(m => m.Timestamp < cutoff)
+                .ExecuteDeleteAsync(ct);
+            totalDeleted += deleted;
+            if (deleted > 0)
+                logger.LogInformation("Deleted {Count} protocol messages older than {Cutoff}", deleted, cutoff);
+        }
+
         if (opts.AuditRetentionDays > 0)
         {
             var cutoff = now.AddDays(-opts.AuditRetentionDays);
@@ -149,6 +160,9 @@ public class DataRetentionOptions
 
     /// <summary>Delete OpenRTB events older than this many days. 0 = never.</summary>
     public int OpenRtbEventRetentionDays { get; set; } = 14;
+
+    /// <summary>Delete persisted protocol messages (MQTT/DNS) older than this many days. 0 = never.</summary>
+    public int ProtocolMessageRetentionDays { get; set; } = 14;
 
     /// <summary>Move audit entries older than this many days to AuditArchive. 0 = never archive.</summary>
     public int AuditRetentionDays { get; set; } = 0;

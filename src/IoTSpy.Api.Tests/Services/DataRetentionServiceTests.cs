@@ -146,6 +146,47 @@ public class DataRetentionServiceTests
     }
 
     [Fact]
+    public async Task RunRetentionPass_DeletesOldProtocolMessages()
+    {
+        var (db, scopeFactory) = CreateDb();
+        var opts = new DataRetentionOptions
+        {
+            Enabled = true,
+            CaptureRetentionDays = 0,
+            PacketRetentionDays = 0,
+            ScanJobRetentionDays = 0,
+            OpenRtbEventRetentionDays = 0,
+            ProtocolMessageRetentionDays = 7,
+            RunIntervalHours = 1
+        };
+
+        db.ProtocolMessages.Add(new PersistedProtocolMessage
+        {
+            Protocol = Core.Enums.InterceptionProtocol.Mqtt,
+            Direction = "client→broker",
+            Summary = "old",
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+        db.ProtocolMessages.Add(new PersistedProtocolMessage
+        {
+            Protocol = Core.Enums.InterceptionProtocol.Mqtt,
+            Direction = "client→broker",
+            Summary = "recent",
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-1)
+        });
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var svc = CreateService(scopeFactory, opts);
+        var method = typeof(DataRetentionService)
+            .GetMethod("RunRetentionPassAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)method.Invoke(svc, [opts, TestContext.Current.CancellationToken])!;
+
+        Assert.Equal(1, await db.ProtocolMessages.CountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("recent", (await db.ProtocolMessages.SingleAsync(TestContext.Current.CancellationToken)).Summary);
+    }
+
+    [Fact]
     public void DataRetentionOptions_Defaults_AreReasonable()
     {
         var opts = new DataRetentionOptions();
