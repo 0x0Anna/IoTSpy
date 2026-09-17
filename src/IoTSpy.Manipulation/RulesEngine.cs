@@ -42,7 +42,7 @@ public class RulesEngine(ILogger<RulesEngine> logger)
         return modified;
     }
 
-    private static bool Matches(ManipulationRule rule, HttpMessage message)
+    internal static bool Matches(ManipulationRule rule, HttpMessage message)
     {
         if (rule.HostPattern is not null && !GetRegex(rule.HostPattern, RegexOptions.IgnoreCase).IsMatch(message.Host))
             return false;

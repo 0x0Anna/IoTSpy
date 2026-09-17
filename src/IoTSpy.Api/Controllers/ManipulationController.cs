@@ -68,7 +68,8 @@ public class ManipulationController(
             BodyReplace = dto.BodyReplace,
             BodyReplaceWith = dto.BodyReplaceWith,
             OverrideStatusCode = dto.OverrideStatusCode,
-            DelayMs = dto.DelayMs
+            DelayMs = dto.DelayMs,
+            AlertOnMatch = dto.AlertOnMatch ?? false
         };
 
         await rules.AddAsync(rule);
@@ -98,6 +99,7 @@ public class ManipulationController(
         rule.BodyReplaceWith = dto.BodyReplaceWith ?? rule.BodyReplaceWith;
         rule.OverrideStatusCode = dto.OverrideStatusCode ?? rule.OverrideStatusCode;
         rule.DelayMs = dto.DelayMs ?? rule.DelayMs;
+        if (dto.AlertOnMatch.HasValue) rule.AlertOnMatch = dto.AlertOnMatch.Value;
 
         await rules.UpdateAsync(rule, ct);
         ruleCache.Invalidate();
@@ -197,7 +199,8 @@ public class ManipulationController(
             ScriptCode = dto.ScriptCode,
             HostPattern = dto.HostPattern,
             PathPattern = dto.PathPattern,
-            Phase = dto.Phase ?? ManipulationPhase.Request
+            Phase = dto.Phase ?? ManipulationPhase.Request,
+            AlertOnMatch = dto.AlertOnMatch ?? false
         };
 
         await breakpoints.AddAsync(bp);
@@ -220,6 +223,7 @@ public class ManipulationController(
         bp.HostPattern = dto.HostPattern ?? bp.HostPattern;
         bp.PathPattern = dto.PathPattern ?? bp.PathPattern;
         if (dto.Phase.HasValue) bp.Phase = dto.Phase.Value;
+        if (dto.AlertOnMatch.HasValue) bp.AlertOnMatch = dto.AlertOnMatch.Value;
 
         await breakpoints.UpdateAsync(bp, ct);
         await auditRepo.AddAsync(new AuditEntry
@@ -549,7 +553,8 @@ public record CreateRuleDto(
     string? BodyReplace = null,
     string? BodyReplaceWith = null,
     int? OverrideStatusCode = null,
-    int? DelayMs = null
+    int? DelayMs = null,
+    bool? AlertOnMatch = null
 );
 
 public record UpdateRuleDto(
@@ -566,7 +571,8 @@ public record UpdateRuleDto(
     string? BodyReplace = null,
     string? BodyReplaceWith = null,
     int? OverrideStatusCode = null,
-    int? DelayMs = null
+    int? DelayMs = null,
+    bool? AlertOnMatch = null
 );
 
 public record CreateBreakpointDto(
@@ -576,7 +582,8 @@ public record CreateBreakpointDto(
     bool? Enabled = null,
     string? HostPattern = null,
     string? PathPattern = null,
-    ManipulationPhase? Phase = null
+    ManipulationPhase? Phase = null,
+    bool? AlertOnMatch = null
 );
 
 public record UpdateBreakpointDto(
@@ -586,7 +593,8 @@ public record UpdateBreakpointDto(
     string? ScriptCode = null,
     string? HostPattern = null,
     string? PathPattern = null,
-    ManipulationPhase? Phase = null
+    ManipulationPhase? Phase = null,
+    bool? AlertOnMatch = null
 );
 
 public record StartReplayDto(

@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 45 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #38, #39, #45, #46, #47, #49, #50, #55, #57 |
+| ✅ Completed | 50 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #45, #46, #47, #49, #50, #55, #57 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 7 | #33, #37, #40–#44, #48 |
+| 🟨 Medium remaining | 3 | #33, #44, #48 |
 | 🟩 Low remaining | 7 | #51–#54, #56, #58, #59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43).
 
 ---
 
@@ -36,18 +36,6 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 ### Incomplete shipped features
 
 **33. Report covers scan findings only** — `ReportService.cs:50` only loads `ScanJob` + `ScanFinding`. No captures, TLS metadata, annotations, MQTT/DNS messages. Not a usable pen-test deliverable. Redesign report sections + template system.
-
-### Missing user stories (high-value)
-
-**37. HAR import** — export exists but no `POST /api/captures/import/har`. Developers can't seed IoTSpy from a browser-captured HAR.
-
-**40. In-app SignalR notification when a rule/breakpoint fires** — `AlertingService` does external webhooks/email/Slack only. Add an in-app channel via the existing collaboration hub.
-
-**41. User mgmt UI may be incomplete** — `UsersTab.tsx` exists but create/edit wiring to `POST /api/auth/users` not verified. Audit the file before assuming work is needed.
-
-**42. DB backup/restore endpoints absent** — admin UI has purge only. Add `GET /api/admin/backup` (SQLite `.backup` / `pg_dump` invocation) + `POST /api/admin/restore`.
-
-**43. `DataRetentionService` thresholds are config-file-only** — no runtime API. Add `GET / PUT /api/admin/retention` + UI in DatabaseTab.
 
 ### Protocol coverage gaps
 
@@ -159,25 +147,29 @@ Each entry includes the closing PR. Use `gh pr view <num>` for the full diff and
 - **#57 — CVSS override on findings** [branch: feature/replay-override-cvss-tests] — `PATCH /api/scanner/findings/{id}` (`PatchFindingDto(double? CvssScore)`) updates `ScanFinding.CvssScore` via new `IScanJobRepository.GetFindingByIdAsync`/`UpdateFindingAsync`. Writes an `AuditEntry` (`Action = "FindingCvssOverride"`, old/new value) following the same manual-override audit pattern as `ManipulationController.StartReplay`'s TLS-bypass audit. Passing `null` explicitly clears an override back to unset. 3 new `ScannerControllerTests`.
 - **#56 — deliberately deferred**, see the Low-tier writeup above for the investigation findings.
 
+### Developer + Admin personas (5 of 5) ✅
+
+- **#37 — HAR import** [branch: feature/har-import-backup-alerts] — `POST /api/captures/import/har` parses a HAR's `log.entries[]` into `CapturedRequest`s (URL via `System.Uri`, raw headers rebuilt from HAR's `{name,value}` pairs, `postData.text`/`content.text` for bodies where present) and bulk-inserts via the existing `ICaptureRepository.AddBatchAsync`. Malformed JSON → 400; individual bad entries are skipped and counted (`{imported, skipped}`) rather than aborting the whole import. 4 new `CaptureImportTests` including an export→import round-trip.
+- **#40 — In-app SignalR alerts (full stack)** [branch: feature/har-import-backup-alerts] — rule/breakpoint firing didn't call `IAlertingService` at all before this (only `ScheduledScanService`'s drift detection did); added an opt-in `AlertOnMatch: bool` (default false) on `ManipulationRule`/`Breakpoint` (migration `AddAlertOnMatch`) rather than alerting unconditionally, since rules/breakpoints are evaluated on every proxied request and unconditional alerting would flood external channels (webhook/email/Slack/PagerDuty) on routine traffic. `AlertingService` gains an `InApp` channel that broadcasts via `IHubContext<CollaborationHub>.Clients.All` (`Clients.All`, not a session group — alerts aren't session-scoped), reusing the existing collaboration hub per the item's own wording rather than adding a new one. Frontend: `useAlertNotifications` hook + `AlertToastStack` toast-stack component, mounted in `DashboardPage`. 6 new `ManipulationServiceTests`, 2 new `AlertingServiceTests`, 4 new `AlertToastStack.test.tsx`.
+- **#41 — UsersTab wiring: already correct, doc was stale** [branch: feature/har-import-backup-alerts] — create/edit/delete were already fully wired to real, Admin-gated `POST`/`PUT`/`DELETE /api/auth/users` endpoints; only test coverage was missing. Added `UsersTab.test.tsx` (5 tests).
+- **#42 — SQLite backup/restore** [branch: feature/har-import-backup-alerts] — `GET /api/admin/backup` (`VACUUM INTO` a temp file, streamed back, then deleted) and `POST /api/admin/restore` (SQLite magic-header validation, a pre-restore safety-net backup of the live file, `SqliteConnection.ClearPool` scoped to just the live connection — **not** `ClearAllPools()`, which is process-wide and would tear down unrelated concurrent SQLite connections elsewhere in the process — then an atomic file overwrite). Postgres returns 501 with guidance to use `pg_dump`/`pg_restore` directly; shelling out to those was deliberately not built (no existing subprocess precedent in this codebase, version-compatibility risk). 5 new `AdminBackupRestoreTests` against a real on-disk SQLite file (the standard in-memory-mode test harness can't exercise a real file-swap).
+- **#43 — Retention runtime API + UI: already done, doc was stale** [branch: feature/har-import-backup-alerts] — `GET/PUT /api/admin/retention` and a full `DatabaseTab.tsx` UI already existed end-to-end; no code changes, just corrected the doc.
+
 ---
 
 ## Recommended next PRs
 
-Updated after feature/replay-override-cvss-tests landed. All Critical, High, and the "incomplete-feature polish" + "Researcher persona" + "Pen-tester persona" Medium/Low items are now resolved (except #56, deliberately deferred). Remaining PRs in priority order:
+Updated after feature/har-import-backup-alerts landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
 
-1. **User-story PRs (medium, high-value)** — pick one per persona-PR:
-   - Developer: #37 (`POST /api/captures/import/har`)
-   - Admin: #41 (audit `UsersTab.tsx` create/edit wiring), #42 (backup/restore endpoints), #43 (`GET/PUT /api/admin/retention` + DatabaseTab UI), #40 (in-app SignalR alerts via collaboration hub)
+1. **Report redesign** — #33. `ReportService` only covers scan findings today; not a usable pen-test deliverable without captures, TLS metadata, annotations, and protocol messages.
 
-2. **Report redesign** — #33. `ReportService` only covers scan findings today; not a usable pen-test deliverable without captures, TLS metadata, annotations, and protocol messages.
+2. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
 
-3. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
+3. **Protocol coverage** — #44. One PR per protocol; AMQP 1.0 and RTSP/RTP first (highest IoT relevance). Slot: `IoTSpy.Protocols`.
 
-4. **Protocol coverage** — #44. One PR per protocol; AMQP 1.0 and RTSP/RTP first (highest IoT relevance). Slot: `IoTSpy.Protocols`.
+4. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
 
-5. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
-
-6. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
+5. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
 
 Each item above is sized to fit a focused PR. Avoid bundling across categories — the cleaner the diff, the easier the review.
 

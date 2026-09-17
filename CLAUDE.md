@@ -79,15 +79,22 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 937 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1010 executed test cases); 116 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
-- 22 REST controllers, 211 endpoints
-- 27 EF Core migrations up through `AddScheduledScanLastRunStatus`
+- 956 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1029 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 22 REST controllers, 214 endpoints
+- 28 EF Core migrations up through `AddAlertOnMatch`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### feature/replay-override-cvss-tests (latest)
+### feature/har-import-backup-alerts (latest)
+`docs/CODE-REVIEW-FINDINGS.md` Developer + Admin persona items #37, #40, #41, #42, #43:
+- HAR import (#37): `POST /api/captures/import/har` parses `log.entries[]` into `CapturedRequest`s, bulk-inserted via `ICaptureRepository.AddBatchAsync`; malformed entries skipped and counted, not fatal
+- In-app alerts (#40, full stack): opt-in `AlertOnMatch: bool` on `ManipulationRule`/`Breakpoint` (migration `AddAlertOnMatch`) — rule/breakpoint firing didn't call `IAlertingService` at all before this, and alerting unconditionally on every proxied request would flood external channels; `AlertingService` gains an `InApp` channel broadcasting via `IHubContext<CollaborationHub>.Clients.All`; frontend `useAlertNotifications` hook + `AlertToastStack` component mounted in `DashboardPage`
+- SQLite backup/restore (#42): `GET /api/admin/backup` (`VACUUM INTO`) + `POST /api/admin/restore` (magic-header validation, pre-restore safety backup, `SqliteConnection.ClearPool` scoped to the live connection only); Postgres returns 501 (`pg_dump`/`pg_restore` deliberately not built — no subprocess precedent in this codebase)
+- #41 (UsersTab) and #43 (retention API+UI) were already fully implemented — doc was stale; only test coverage was added for #41, no code changes for #43
+
+### feature/replay-override-cvss-tests (previous)
 `docs/CODE-REVIEW-FINDINGS.md` Pen-tester-persona items #38, #57 (#56 investigated, deliberately deferred — see doc):
 - Replay override verified end-to-end (#38): `StartReplayDto` Host/Port/Path/Query overrides already worked correctly through `ReplayService`; added 6 `ReplayServiceTests` (capturing `HttpMessageHandler`) + a `ManipulationControllerTests` override case, plus Port/Query inputs in `ReplayPanel.tsx` (backend already supported them, UI didn't expose them)
 - CVSS override (#57): `PATCH /api/scanner/findings/{id}` (`PatchFindingDto`) via new `IScanJobRepository.GetFindingByIdAsync`/`UpdateFindingAsync`; audited as `FindingCvssOverride`

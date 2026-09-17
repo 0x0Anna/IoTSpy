@@ -10,6 +10,11 @@ public class AlertingOptions
     public SlackOptions? Slack { get; set; }
     public TeamsOptions? Teams { get; set; }
     public PagerDutyOptions? PagerDuty { get; set; }
+
+    /// <summary>Pushes alerts to connected clients via the existing collaboration SignalR
+    /// hub (Clients.All — not session-scoped, since alerts aren't tied to an investigation
+    /// session). Needs no external config, unlike the other channels.</summary>
+    public bool InApp { get; set; } = false;
 }
 
 public class WebhookOptions

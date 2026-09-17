@@ -152,6 +152,94 @@ public class CapturesController(ICaptureRepository captures) : ControllerBase
         return File(Encoding.UTF8.GetBytes(json), "application/json", "captures.har");
     }
 
+    [HttpPost("import/har")]
+    public async Task<IActionResult> ImportHar([FromBody] JsonElement har, CancellationToken ct)
+    {
+        if (!har.TryGetProperty("log", out var log) || !log.TryGetProperty("entries", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+            return BadRequest(new { error = "Invalid HAR: expected log.entries array" });
+
+        var toImport = new List<CapturedRequest>();
+        var skipped = 0;
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            var capture = TryParseHarEntry(entry);
+            if (capture is null) skipped++;
+            else toImport.Add(capture);
+        }
+
+        if (toImport.Count > 0)
+            await captures.AddBatchAsync(toImport, ct);
+
+        return Ok(new { imported = toImport.Count, skipped });
+    }
+
+    private static CapturedRequest? TryParseHarEntry(JsonElement entry)
+    {
+        try
+        {
+            var request = entry.GetProperty("request");
+            var response = entry.GetProperty("response");
+            var uri = new Uri(request.GetProperty("url").GetString()!);
+
+            var requestBody = request.TryGetProperty("postData", out var postData) &&
+                               postData.TryGetProperty("text", out var textEl)
+                ? textEl.GetString() ?? ""
+                : "";
+
+            var responseBody = response.TryGetProperty("content", out var content) &&
+                                content.TryGetProperty("text", out var respTextEl)
+                ? respTextEl.GetString() ?? ""
+                : "";
+
+            return new CapturedRequest
+            {
+                Method = request.GetProperty("method").GetString() ?? "GET",
+                Scheme = uri.Scheme,
+                Host = uri.Host,
+                Port = uri.Port,
+                Path = uri.AbsolutePath,
+                Query = uri.Query,
+                RequestHeaders = BuildRawHeaders(request),
+                RequestBody = requestBody,
+                RequestBodySize = Encoding.UTF8.GetByteCount(requestBody),
+                StatusCode = response.GetProperty("status").GetInt32(),
+                StatusMessage = response.TryGetProperty("statusText", out var st) ? st.GetString() ?? "" : "",
+                ResponseHeaders = BuildRawHeaders(response),
+                ResponseBody = responseBody,
+                ResponseBodySize = Encoding.UTF8.GetByteCount(responseBody),
+                IsTls = uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase),
+                Protocol = IoTSpy.Core.Enums.InterceptionProtocol.Http,
+                Timestamp = entry.TryGetProperty("startedDateTime", out var started) && started.GetString() is { } s
+                    ? DateTimeOffset.Parse(s)
+                    : DateTimeOffset.UtcNow,
+                DurationMs = entry.TryGetProperty("time", out var time) ? (long)time.GetDouble() : 0,
+                Notes = "Imported from HAR"
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string BuildRawHeaders(JsonElement requestOrResponse)
+    {
+        if (!requestOrResponse.TryGetProperty("headers", out var headers) || headers.ValueKind != JsonValueKind.Array)
+            return "";
+
+        var sb = new StringBuilder();
+        foreach (var h in headers.EnumerateArray())
+        {
+            var name = h.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var value = h.TryGetProperty("value", out var v) ? v.GetString() : null;
+            if (string.IsNullOrEmpty(name)) continue;
+            sb.Append(name).Append(": ").Append(value).Append("\r\n");
+        }
+        return sb.ToString();
+    }
+
     private Task<List<CapturedRequest>> GetExportItems(
         Guid? deviceId, DateTimeOffset? from, DateTimeOffset? to, CancellationToken ct)
     {
