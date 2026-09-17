@@ -570,7 +570,7 @@ cd frontend && npm run dev
 
 See [`docs/PLAN-INDEX.md`](docs/PLAN-INDEX.md) for the full implementation plan, identified gaps, and forward-looking roadmap.
 
-> **825 backend tests** across 8 test projects; 102 frontend component tests; Playwright E2E suite. All passing.
+> **917 backend tests** across 9 test projects; 102 frontend component tests; Playwright E2E suite. All passing.
 
 | Phase | Scope | Status |
 |---|---|---|

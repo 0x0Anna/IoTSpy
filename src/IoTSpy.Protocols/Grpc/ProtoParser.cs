@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace IoTSpy.Protocols.Grpc;
@@ -76,32 +77,22 @@ public static partial class ProtoParser
     /// <summary>
     /// Serialises a flat field map to a compact JSON string for storage.
     /// </summary>
-    public static string ToJson(Dictionary<int, string> map)
-    {
-        if (map.Count == 0) return "{}";
-        var pairs = map.Select(kv => $"\"{kv.Key}\":\"{kv.Value}\"");
-        return "{" + string.Join(",", pairs) + "}";
-    }
+    public static string ToJson(Dictionary<int, string> map) => JsonSerializer.Serialize(map);
 
     /// <summary>
     /// Deserialises the compact JSON produced by <see cref="ToJson"/>.
     /// </summary>
     public static Dictionary<int, string> FromJson(string json)
     {
-        var result = new Dictionary<int, string>();
-        if (string.IsNullOrWhiteSpace(json) || json == "{}") return result;
+        if (string.IsNullOrWhiteSpace(json)) return new Dictionary<int, string>();
 
-        // Simple hand-rolled parser — avoids a System.Text.Json dependency in Protocols
-        var content = json.Trim('{', '}', ' ');
-        foreach (var pair in content.Split(','))
+        try
         {
-            var parts = pair.Split(':');
-            if (parts.Length != 2) continue;
-            var keyStr = parts[0].Trim('"', ' ');
-            var val = parts[1].Trim('"', ' ');
-            if (int.TryParse(keyStr, out var key))
-                result[key] = val;
+            return JsonSerializer.Deserialize<Dictionary<int, string>>(json) ?? new Dictionary<int, string>();
         }
-        return result;
+        catch (JsonException)
+        {
+            return new Dictionary<int, string>();
+        }
     }
 }

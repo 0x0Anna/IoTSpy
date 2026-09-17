@@ -14,6 +14,9 @@ namespace IoTSpy.Api.Services;
 /// </summary>
 public sealed class ScheduledScanService : BackgroundService
 {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxWait = TimeSpan.FromMinutes(5);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IScannerService _scannerService;
     private readonly IAlertingService _alertingService;
@@ -102,6 +105,9 @@ public sealed class ScheduledScanService : BackgroundService
                 if (device is null)
                 {
                     _logger.LogWarning("Device {DeviceId} not found for scheduled scan {Id}", schedule.DeviceId, schedule.Id);
+                    schedule.LastRunAt = now;
+                    schedule.LastRunStatus = ScanStatus.Failed;
+                    schedule.LastRunError = "Device not found";
                     schedule.NextRunAt = ComputeNextRun(schedule.CronExpression, now);
                     await repo.UpdateAsync(schedule, ct);
                     continue;
@@ -123,8 +129,16 @@ public sealed class ScheduledScanService : BackgroundService
                 var result = await _scannerService.StartScanAsync(job, ct);
                 var previousJobId = schedule.LastScanJobId;
 
+                // StartScanAsync returns immediately (the scan itself runs on a background
+                // Task.Run) — wait for a terminal status so LastRunStatus reflects the actual
+                // outcome, not just "the scan was kicked off". This also fixes a pre-existing
+                // bug where drift detection below ran against an unfinished scan's findings.
+                var finalJob = await WaitForTerminalStatusAsync(scanJobRepo, result.Id, ct);
+
                 schedule.LastRunAt = now;
                 schedule.LastScanJobId = result.Id;
+                schedule.LastRunStatus = finalJob.Status;
+                schedule.LastRunError = finalJob.Status == ScanStatus.Failed ? finalJob.ErrorMessage : null;
                 schedule.NextRunAt = ComputeNextRun(schedule.CronExpression, now);
                 await repo.UpdateAsync(schedule, ct);
 
@@ -137,10 +151,46 @@ public sealed class ScheduledScanService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error running scheduled scan {Id}", schedule.Id);
+                schedule.LastRunAt = now;
+                schedule.LastRunStatus = ScanStatus.Failed;
+                schedule.LastRunError = ex.Message;
                 schedule.NextRunAt = ComputeNextRun(schedule.CronExpression, now);
                 await repo.UpdateAsync(schedule, ct);
             }
         }
+    }
+
+    private static readonly ScanStatus[] TerminalStatuses = [ScanStatus.Completed, ScanStatus.Failed, ScanStatus.Cancelled];
+
+    /// <summary>
+    /// Polls the scan job until it reaches a terminal status or <see cref="MaxWait"/> elapses.
+    /// Checks status before delaying, so a job that is already terminal on the first read
+    /// returns immediately with no delay — this keeps unit tests fast.
+    /// </summary>
+    private async Task<ScanJob> WaitForTerminalStatusAsync(IScanJobRepository scanJobRepo, Guid jobId, CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow + MaxWait;
+        ScanJob? job;
+
+        while (true)
+        {
+            job = await scanJobRepo.GetByIdAsync(jobId, ct);
+            if (job is null || TerminalStatuses.Contains(job.Status) || DateTimeOffset.UtcNow >= deadline)
+                break;
+
+            await Task.Delay(PollInterval, ct);
+        }
+
+        if (job is null)
+        {
+            _logger.LogWarning("Scan job {JobId} disappeared while waiting for completion", jobId);
+            return new ScanJob { Id = jobId, Status = ScanStatus.Failed, ErrorMessage = "Scan job not found after starting" };
+        }
+
+        if (!TerminalStatuses.Contains(job.Status))
+            _logger.LogWarning("Scan job {JobId} did not reach a terminal status within {MaxWait}", jobId, MaxWait);
+
+        return job;
     }
 
     private async Task DetectDriftAsync(

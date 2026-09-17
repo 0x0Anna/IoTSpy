@@ -126,4 +126,22 @@ public class ProtoParserTests
     {
         Assert.Empty(ProtoParser.FromJson("{}"));
     }
+
+    [Fact]
+    public void ToJson_FromJson_RoundTrip_FieldNameContainsCommaAndColon()
+    {
+        // Regression: the old hand-rolled parser split on literal ',' and ':',
+        // which broke on field names containing those characters.
+        var original = new Dictionary<int, string> { [1] = "weird,field:name" };
+        var json = ProtoParser.ToJson(original);
+        var restored = ProtoParser.FromJson(json);
+
+        Assert.Equal("weird,field:name", restored[1]);
+    }
+
+    [Fact]
+    public void FromJson_MalformedInput_ReturnsEmptyInsteadOfThrowing()
+    {
+        Assert.Empty(ProtoParser.FromJson("not valid json"));
+    }
 }
