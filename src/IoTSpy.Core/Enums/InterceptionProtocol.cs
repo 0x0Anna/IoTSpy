@@ -17,5 +17,13 @@ public enum InterceptionProtocol
     Rtsp,
     Rtp,
     TlsPassthrough,
+
+    /// <summary>
+    /// HTTPS traffic identified as DNS-over-HTTPS (RFC 8484) — the request is otherwise a
+    /// normal HTTPS capture, but its framing (path/content-type/query param) indicates it
+    /// is carrying an encrypted DNS query/response rather than application content.
+    /// </summary>
+    DohDetected,
+
     Other
 }
