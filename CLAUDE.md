@@ -209,3 +209,4 @@ Restart the API after running `setcap`. See AGENT.md for full details.
 
 See `docs/PHASES-COMPLETED.md` for full phase details and `docs/PHASES-ROADMAP.md` for the future roadmap.
 See `docs/ARCHITECTURE.md` for the full architecture spec.
+See `docs/RUNBOOK.md` for on-call incident response (proxy stops intercepting, SQLite corruption, JWT secret rotation, cert issues, retention/disk growth, SignalR degradation, container rollback) and `docs/TROUBLESHOOTING.md` for dev-environment/build issues.

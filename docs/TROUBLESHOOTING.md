@@ -1,6 +1,6 @@
 # IoTSpy — Troubleshooting Guide
 
-Solutions for common problems agents and developers encounter.
+Solutions for common problems agents and developers encounter during development. For production incident response (proxy outages, database corruption, secret rotation, certificate issues), see [RUNBOOK.md](RUNBOOK.md) instead.
 
 ---
 
