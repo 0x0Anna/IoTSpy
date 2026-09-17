@@ -25,6 +25,8 @@ public DbSet<OpenRtbEvent> OpenRtbEvents => Set<OpenRtbEvent>();
     public DbSet<CaptureDevice> CaptureDevices => Set<CaptureDevice>();
     public DbSet<CapturedPacket> Packets => Set<CapturedPacket>();
 
+    public DbSet<PersistedProtocolMessage> ProtocolMessages => Set<PersistedProtocolMessage>();
+
     // Phase 9
     public DbSet<ScheduledScan> ScheduledScans => Set<ScheduledScan>();
 
@@ -278,6 +280,18 @@ modelBuilder.Entity<OpenRtbPiiPolicy>(e =>
             e.HasIndex(p => p.Protocol);
             e.HasIndex(p => p.SourceIp);
             e.HasIndex(p => p.DestinationIp);
+        });
+
+        modelBuilder.Entity<PersistedProtocolMessage>(e =>
+        {
+            e.HasKey(m => m.Id);
+            e.Property(m => m.Direction).IsRequired().HasMaxLength(32);
+            e.Property(m => m.Subject).HasMaxLength(512);
+            e.Property(m => m.Summary).IsRequired().HasMaxLength(256);
+            e.Property(m => m.PayloadPreview).HasMaxLength(2048);
+            e.HasIndex(m => m.Timestamp);
+            e.HasIndex(m => m.DeviceId);
+            e.HasIndex(m => m.Protocol);
         });
 
         // API Spec & Content Replacement

@@ -12,6 +12,7 @@ using System.Text;
 using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
+using IoTSpy.Protocols.Doh;
 using IoTSpy.Proxy.Passive;
 using IoTSpy.Proxy.Resilience;
 using IoTSpy.Proxy.Tls;
@@ -40,6 +41,7 @@ public class ExplicitProxyServer(
     IPerHostConnectPipelineCache perHostPipelines,
     IPassiveProxyBuffer passiveBuffer,
     ICaptureBatchWriter captureBatchWriter,
+    IProtocolMessageWriter protocolMessageWriter,
     ILogger<ExplicitProxyServer> logger)
 {
     private TcpListener? _listener;
@@ -524,6 +526,11 @@ public class ExplicitProxyServer(
             if (contentType.StartsWith("application/grpc", StringComparison.OrdinalIgnoreCase))
                 capture.Protocol = InterceptionProtocol.Grpc;
 
+            // Detect DNS-over-HTTPS (RFC 8484) and decode the embedded query for reporting
+            var dohResult = DohDetector.TryDetect(method, $"{path}{query}", reqHeaders, reqBody);
+            if (DohDetector.TryBuildPersistedMessage(dohResult, capture.DeviceId, capture.Timestamp) is { } dohMessage)
+                protocolMessageWriter.TryEnqueue(dohMessage);
+
             captureBatchWriter.TryEnqueue(capture);
 
             // Phase 8.5: Feed the anomaly detector and publish any triggered alerts
@@ -738,8 +745,10 @@ public class ExplicitProxyServer(
 
         // Parse ClientHello for SNI and JA3
         var sniHost = connectHost;
+        ClientHelloInfo? clientHelloForDotCheck = null;
         if (TlsClientHelloParser.TryParse(initialBuf.AsSpan(0, initialLen), out var clientHello))
         {
+            clientHelloForDotCheck = clientHello;
             if (!string.IsNullOrEmpty(clientHello.SniHostname))
                 sniHost = clientHello.SniHostname;
 
@@ -869,6 +878,11 @@ public class ExplicitProxyServer(
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
         var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+
+        // Flag likely DNS-over-TLS (port 853 or a known-resolver SNI) — encrypted payload
+        // gives no further visibility, so this is the only detection signal available.
+        if (clientHelloForDotCheck is not null)
+            metadata.IsLikelyDot = DotDetector.IsLikelyDot(clientHelloForDotCheck, port);
 
         var capture = new CapturedRequest
         {

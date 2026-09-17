@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using IoTSpy.Protocols.Mqtt;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace IoTSpy.Proxy.Interception;
@@ -14,8 +16,11 @@ namespace IoTSpy.Proxy.Interception;
 /// </summary>
 public class MqttBrokerProxy(
     ICapturePublisher publisher,
+    IProtocolMessageWriter protocolMessageWriter,
+    IServiceScopeFactory scopeFactory,
     ILogger<MqttBrokerProxy> logger) : IMqttBrokerProxy
 {
+    private const int PayloadPreviewMaxLength = 2048;
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private int _activeConnections;
@@ -77,6 +82,9 @@ public class MqttBrokerProxy(
             client.ReceiveTimeout = 60_000;
             client.SendTimeout = 30_000;
             var clientIp = ((IPEndPoint?)client.Client.RemoteEndPoint)?.Address.ToString() ?? "unknown";
+            // Resolved once per connection, not per message — a scoped repository lookup
+            // on every decoded packet would be a needless DB round-trip on the hot path.
+            var deviceId = await TryResolveDeviceIdAsync(clientIp, ct);
 
             TcpClient? upstream = null;
             try
@@ -141,6 +149,8 @@ public class MqttBrokerProxy(
                                         await publisher.PublishMqttMessageAsync(captured, token);
                                         logger.LogDebug("MQTT {Dir} {PacketType} client={ClientId} topic={Topic}",
                                             captured.Direction, msg.PacketType, clientId, msg.Topic);
+
+                                        protocolMessageWriter.TryEnqueue(BuildPersistedMessage(captured, deviceId));
                                     }
                                 }
                             }
@@ -175,6 +185,36 @@ public class MqttBrokerProxy(
         }
         Interlocked.Decrement(ref _activeConnections);
     }
+
+    private async Task<Guid?> TryResolveDeviceIdAsync(string clientIp, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+            var device = await devices.GetByIpAsync(clientIp, ct);
+            return device?.Id;
+        }
+        catch (Exception ex)
+        {
+            logger.LogTrace(ex, "MQTT device lookup failed for {ClientIp} (non-fatal)", clientIp);
+            return null;
+        }
+    }
+
+    private static PersistedProtocolMessage BuildPersistedMessage(MqttCapturedMessage captured, Guid? deviceId) =>
+        new()
+        {
+            DeviceId = deviceId,
+            Protocol = InterceptionProtocol.Mqtt,
+            Direction = captured.Direction,
+            Subject = captured.Topic,
+            Summary = $"{captured.PacketType} qos={captured.QoS} retain={captured.Retain} payloadLen={captured.PayloadSize}",
+            PayloadPreview = captured.PayloadText is { Length: > 0 } text
+                ? text[..Math.Min(text.Length, PayloadPreviewMaxLength)]
+                : null,
+            Timestamp = captured.Timestamp
+        };
 
     /// <summary>
     /// Matches an MQTT topic against a filter pattern (supports + and # wildcards).
