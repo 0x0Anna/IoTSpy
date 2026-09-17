@@ -25,5 +25,7 @@ public interface IScanJobRepository
     Task AddFindingAsync(ScanFinding finding, CancellationToken ct = default);
     Task AddFindingsAsync(IEnumerable<ScanFinding> findings, CancellationToken ct = default);
     Task<List<ScanFinding>> GetFindingsAsync(Guid scanJobId, CancellationToken ct = default);
+    Task<ScanFinding?> GetFindingByIdAsync(Guid id, CancellationToken ct = default);
+    Task<ScanFinding> UpdateFindingAsync(ScanFinding finding, CancellationToken ct = default);
     Task<int> DeleteByFilterAsync(ScanStatus? status, DateTimeOffset? completedBefore, CancellationToken ct = default);
 }

@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 43 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #39, #45, #46, #47, #49, #50, #55 |
+| ✅ Completed | 45 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #38, #39, #45, #46, #47, #49, #50, #55, #57 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 9 | #33, #37, #38, #40–#44, #48 |
-| 🟩 Low remaining | 8 | #51–#54, #56–#59 |
+| 🟨 Medium remaining | 7 | #33, #37, #40–#44, #48 |
+| 🟩 Low remaining | 7 | #51–#54, #56, #58, #59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred).
 
 ---
 
@@ -40,8 +40,6 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 ### Missing user stories (high-value)
 
 **37. HAR import** — export exists but no `POST /api/captures/import/har`. Developers can't seed IoTSpy from a browser-captured HAR.
-
-**38. Replay against override base URL** — `StartReplayDto.Host` exists but UX/coverage unclear. Verify end-to-end and surface in the UI.
 
 **40. In-app SignalR notification when a rule/breakpoint fires** — `AlertingService` does external webhooks/email/Slack only. Add an in-app channel via the existing collaboration hub.
 
@@ -71,9 +69,7 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 
 **54. No on-call runbook in `docs/`** — what to do when the proxy stops intercepting, how to recover from corrupt SQLite, how to rotate JWT secret without logging everyone out.
 
-**56. Project/workspace concept absent** — no aggregate over Device + Session + ScanJob to namespace per-engagement artifacts.
-
-**57. CVSS override unavailable on findings** — `ScanFinding.CvssScore` is OSV-derived and read-only. Add `PATCH /api/scanner/findings/{id}` for tester override.
+**56. Project/workspace concept absent** — no aggregate over Device + Session + ScanJob to namespace per-engagement artifacts. **Deliberately deferred** (investigated in feature/replay-override-cvss-tests): none of `Device`/`ScanJob`/`InvestigationSession` share so much as a tag field today; `InvestigationSession` only aggregates captures/annotations/activity, never `Device` or `ScanJob`. A full implementation needs either a new `Project` entity with FKs into all three, or retrofitting `InvestigationSession` — either way touching ~14 existing `DeviceId`-keyed call sites across ~5 controllers and 3 repositories, plus multiple migrations. A cheap `Tags`/`ProjectLabel` field on `Device`/`ScanJob` was considered as a partial step but rejected as not actually satisfying the ask — worth its own design discussion rather than folding into another PR.
 
 **58. Scheduled scans against a target list** — `ScheduledScan` is FK'd to a single `Device`. Support tag/CIDR-based target lists.
 
@@ -157,14 +153,19 @@ Each entry includes the closing PR. Use `gh pr view <num>` for the full diff and
 - **#39 — Body full-text search on captures: corrected, not missing** [branch: feature/capture-curl-diff] — investigation found `?q=` already searches `RequestBody`/`ResponseBody` via `CaptureFilter.BodySearch` (`CaptureRepository.ApplyFilter`); the original item's claim that `?q=` is host/URL-only and body search doesn't exist was stale. Real SQLite FTS5 was evaluated and intentionally **not** built: zero existing FTS5 infrastructure in the repo, and adding it would mean SQLite-only sync triggers plus a separate Postgres tsvector/pg_trgm path — cross-provider complexity ruled out to avoid breaking Postgres parity. Landed instead: a `MinSearchTermLength` (3-char) guard on `?q=`/`?headerQ=` in `CapturesController.List`, since a 1-2 character `LIKE '%x%'` is a near-full-table scan regardless of provider (a leading wildcard defeats a B-tree index on both SQLite and Postgres). New repository test covers `BodySearch` (previously untested despite already working).
 - **#55 — Capture diff endpoint** [branch: feature/capture-curl-diff] — `GET /api/captures/diff?a=&b=` returns a structural diff (method/URL/status-changed flags, per-header add/remove/change entries via `HttpHeaderParser`, request/response body-equality flags) with no external diff library — a future UI renders it however it likes. 400 on `a == b`, 404 naming whichever capture(s) are missing.
 
+### Pen-tester persona (2 of 3 — #56 deliberately deferred) ✅
+
+- **#38 — Replay against override base URL: verified, not broken** [branch: feature/replay-override-cvss-tests] — investigation found `Host`/`Port`/`Path`/`Query` overrides on `StartReplayDto` already flow end-to-end through `ManipulationController.StartReplay` → `ManipulationService.ReplayAsync` → `ReplayService.ExecuteReplayAsync`, which builds a real `UriBuilder` against the override and sends via `IHttpClientFactory` — not cosmetic. The real gaps were zero test coverage (now covered: 6 new `ReplayServiceTests` using a capturing `HttpMessageHandler`, plus a `ManipulationControllerTests` case asserting all four overrides land on the `ReplaySession`) and a frontend gap — `ReplayPanel.tsx` had Host/Path inputs but no Port/Query, and `CreateReplayRequest` didn't even have those fields, so the backend-supported override was unreachable from the UI. Added both. A literal `Host:` header is intentionally stripped before sending (avoids conflicting with the real connection target) — documented with a regression test rather than "fixed" as a bug.
+- **#57 — CVSS override on findings** [branch: feature/replay-override-cvss-tests] — `PATCH /api/scanner/findings/{id}` (`PatchFindingDto(double? CvssScore)`) updates `ScanFinding.CvssScore` via new `IScanJobRepository.GetFindingByIdAsync`/`UpdateFindingAsync`. Writes an `AuditEntry` (`Action = "FindingCvssOverride"`, old/new value) following the same manual-override audit pattern as `ManipulationController.StartReplay`'s TLS-bypass audit. Passing `null` explicitly clears an override back to unset. 3 new `ScannerControllerTests`.
+- **#56 — deliberately deferred**, see the Low-tier writeup above for the investigation findings.
+
 ---
 
 ## Recommended next PRs
 
-Updated after feature/capture-curl-diff landed. All Critical, High, and the "incomplete-feature polish" + "Researcher persona" Medium/Low items are now resolved. Remaining PRs in priority order:
+Updated after feature/replay-override-cvss-tests landed. All Critical, High, and the "incomplete-feature polish" + "Researcher persona" + "Pen-tester persona" Medium/Low items are now resolved (except #56, deliberately deferred). Remaining PRs in priority order:
 
 1. **User-story PRs (medium, high-value)** — pick one per persona-PR:
-   - Pen-tester: #38 (replay base-URL override end-to-end), #57 (CVSS override `PATCH /api/scanner/findings/{id}`), #56 (project/workspace concept)
    - Developer: #37 (`POST /api/captures/import/har`)
    - Admin: #41 (audit `UsersTab.tsx` create/edit wiring), #42 (backup/restore endpoints), #43 (`GET/PUT /api/admin/retention` + DatabaseTab UI), #40 (in-app SignalR alerts via collaboration hub)
 

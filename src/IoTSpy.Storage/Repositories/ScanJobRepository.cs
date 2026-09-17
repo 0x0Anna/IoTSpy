@@ -95,6 +95,20 @@ public class ScanJobRepository(IoTSpyDbContext db) : IScanJobRepository
             .OrderBy(f => f.FoundAt)
             .ToListAsync(ct);
 
+    public Task<ScanFinding?> GetFindingByIdAsync(Guid id, CancellationToken ct = default) =>
+        db.ScanFindings.AsNoTracking().FirstOrDefaultAsync(f => f.Id == id, ct);
+
+    public async Task<ScanFinding> UpdateFindingAsync(ScanFinding finding, CancellationToken ct = default)
+    {
+        var tracked = db.ChangeTracker.Entries<ScanFinding>().FirstOrDefault(e => e.Entity.Id == finding.Id);
+        if (tracked is not null)
+            tracked.CurrentValues.SetValues(finding);
+        else
+            db.ScanFindings.Update(finding);
+        await db.SaveChangesAsync(ct);
+        return finding;
+    }
+
     public async Task<int> DeleteByFilterAsync(ScanStatus? status, DateTimeOffset? completedBefore, CancellationToken ct = default)
     {
         var query = db.ScanJobs.AsQueryable();

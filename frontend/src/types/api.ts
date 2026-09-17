@@ -549,7 +549,9 @@ export interface CreateReplayRequest {
   captureId: string
   method?: string
   host?: string
+  port?: number
   path?: string
+  query?: string
   requestHeaders?: string
   requestBody?: string
   bypassTlsValidation?: boolean
