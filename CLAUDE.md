@@ -79,15 +79,24 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 1032 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1109 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
-- 22 REST controllers, 214 endpoints
+- 1044 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1121 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 22 REST controllers, 216 endpoints
 - 29 EF Core migrations up through `AddPersistedProtocolMessages`
 - GitHub Actions CI at `.github/workflows/ci.yml`
 - Helm chart at `deploy/helm/iotspy/`; production Docker Compose at `docker-compose.prod.yml`
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### Protocol-message persistence: MQTT + DoH-DNS, DoT flag (latest — #33 prerequisite)
+### Report redesign: Scriban HTML + device/session-scoped reports (latest — closes #33)
+`docs/CODE-REVIEW-FINDINGS.md` #33 — `ReportService` previously only loaded `ScanJob`+`ScanFinding` for a single device; not a usable pen-test deliverable. Built on the persistence infrastructure from the previous PR.
+- Introduced Scriban (first templated text asset in the solution) — `src/IoTSpy.Scanner/Reports/Templates/report.scriban`, embedded resource, parsed once and cached in `ReportTemplateEngine`; all user-controlled fields piped through `html.escape` (verified by a dedicated XSS-escaping test) since Scriban doesn't auto-escape
+- `ReportDataLoader` aggregates device info, scan findings (grouped by severity in C#, not the template — Scriban's lambda/filter syntax was too fragile for that), captures (TLS metadata parsed from `TlsMetadataJson`, capped at 200 rows per report), protocol messages, and — for session-scoped reports only — annotations and the activity feed
+- `IReportService` now exposes `GenerateDeviceHtmlReportAsync`/`GenerateDevicePdfReportAsync` and `GenerateSessionHtmlReportAsync`/`GenerateSessionPdfReportAsync`; new routes `GET /api/reports/sessions/{sessionId}/html|pdf` alongside the existing device-scoped ones
+- QuestPDF path (`ReportPdfBuilder`) updated to render the same expanded sections — kept as its fluent DSL rather than templated, since QuestPDF's page-flow model doesn't map onto a text template
+- Frontend: `api/reports.ts` (previously zero callers) wired into `ScannerPanel` (device report buttons next to scan findings) and `SessionsPanel` (session report buttons next to Export/Share)
+- New `ReportControllerTests` (7 tests, previously untested) + expanded `ReportServiceTests` (device + session scoped, empty-state, XSS-escaping)
+
+### Protocol-message persistence: MQTT + DoH-DNS, DoT flag (previous — #33 prerequisite)
 Infrastructure PR for `docs/CODE-REVIEW-FINDINGS.md` #33 (report redesign) — persists what was previously decoded live and discarded, so a follow-up report PR can surface it. Not the report redesign itself.
 - New `PersistedProtocolMessage` table (migration `AddPersistedProtocolMessages`) — flat, truncated projection (no raw bytes), indexed on `Timestamp`/`DeviceId`/`Protocol`, mirroring `CapturedPacket`'s "no FK cascade" convention
 - `ProtocolMessageBatchWriter`/`IProtocolMessageWriter` — bounded-channel, drop-oldest, batched persistence mirroring `CaptureBatchWriter` exactly; avoids one DB write per decoded message on the proxy hot path

@@ -13,19 +13,24 @@ public class ProtocolMessageRepository(IoTSpyDbContext db) : IProtocolMessageRep
     }
 
     public Task<List<PersistedProtocolMessage>> GetByDeviceIdAsync(
-        Guid deviceId, DateTimeOffset? from = null, DateTimeOffset? to = null, CancellationToken ct = default) =>
-        ApplyRange(db.ProtocolMessages.AsNoTracking().Where(m => m.DeviceId == deviceId), from, to)
-            .OrderByDescending(m => m.Timestamp)
-            .ToListAsync(ct);
+        Guid deviceId, DateTimeOffset? from = null, DateTimeOffset? to = null, int? limit = null, CancellationToken ct = default)
+    {
+        var query = ApplyRange(db.ProtocolMessages.AsNoTracking().Where(m => m.DeviceId == deviceId), from, to)
+            .OrderByDescending(m => m.Timestamp);
+        return ApplyLimit(query, limit).ToListAsync(ct);
+    }
 
     public Task<List<PersistedProtocolMessage>> GetByDeviceIdsAsync(
-        IEnumerable<Guid> deviceIds, DateTimeOffset? from = null, DateTimeOffset? to = null, CancellationToken ct = default)
+        IEnumerable<Guid> deviceIds, DateTimeOffset? from = null, DateTimeOffset? to = null, int? limit = null, CancellationToken ct = default)
     {
         var ids = deviceIds.ToList();
-        return ApplyRange(db.ProtocolMessages.AsNoTracking().Where(m => m.DeviceId != null && ids.Contains(m.DeviceId!.Value)), from, to)
-            .OrderByDescending(m => m.Timestamp)
-            .ToListAsync(ct);
+        var query = ApplyRange(db.ProtocolMessages.AsNoTracking().Where(m => m.DeviceId != null && ids.Contains(m.DeviceId!.Value)), from, to)
+            .OrderByDescending(m => m.Timestamp);
+        return ApplyLimit(query, limit).ToListAsync(ct);
     }
+
+    private static IQueryable<PersistedProtocolMessage> ApplyLimit(IQueryable<PersistedProtocolMessage> q, int? limit) =>
+        limit.HasValue ? q.Take(limit.Value) : q;
 
     private static IQueryable<PersistedProtocolMessage> ApplyRange(
         IQueryable<PersistedProtocolMessage> q, DateTimeOffset? from, DateTimeOffset? to)

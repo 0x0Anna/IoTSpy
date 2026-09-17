@@ -263,7 +263,7 @@ public class SessionsControllerTests
         var (controller, sessionRepo, annotationRepo, _, _) = CreateController();
         var session = new InvestigationSession { Name = "SharedSession", ShareToken = "abc", IsActive = true };
         sessionRepo.GetByShareTokenAsync("abc", Arg.Any<CancellationToken>()).Returns(session);
-        sessionRepo.GetSessionCapturesAsync(session.Id, Arg.Any<CancellationToken>()).Returns(new List<SessionCapture>());
+        sessionRepo.GetSessionCapturesAsync(session.Id, Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(new List<SessionCapture>());
         annotationRepo.GetBySessionAsync(session.Id, Arg.Any<CancellationToken>()).Returns(new List<CaptureAnnotation>());
 
         var result = await controller.GetByShareToken("abc") as OkObjectResult;

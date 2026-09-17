@@ -14,6 +14,9 @@ public interface IInvestigationSessionRepository
     // SessionCapture join table
     Task AddCaptureAsync(SessionCapture sc, CancellationToken ct = default);
     Task RemoveCaptureAsync(Guid sessionId, Guid captureId, CancellationToken ct = default);
-    Task<List<SessionCapture>> GetSessionCapturesAsync(Guid sessionId, CancellationToken ct = default);
+    /// <summary>Most recently added captures for a session, newest first. <paramref name="limit"/>
+    /// applies at the database level (not an in-memory truncation) — pass it whenever the full
+    /// history isn't needed, since captures carry full request/response bodies.</summary>
+    Task<List<SessionCapture>> GetSessionCapturesAsync(Guid sessionId, int? limit = null, CancellationToken ct = default);
     Task<bool> ContainsCaptureAsync(Guid sessionId, Guid captureId, CancellationToken ct = default);
 }

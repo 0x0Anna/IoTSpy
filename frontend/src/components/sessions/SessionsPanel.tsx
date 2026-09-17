@@ -11,6 +11,7 @@ import {
   exportSession,
   addCaptureToSession,
 } from '../../api/sessions'
+import { downloadSessionHtmlReport, downloadSessionPdfReport } from '../../api/reports'
 import { listCaptures } from '../../api/captures'
 import type { CaptureAnnotation } from '../../types/sessions'
 import type { CapturedRequestSummary } from '../../types/api'
@@ -148,6 +149,15 @@ export default function SessionsPanel() {
       await exportSession(activeSessionId, session.name)
     } catch {
       showToast('Export failed')
+    }
+  }
+
+  const handleReport = async (format: 'html' | 'pdf') => {
+    if (!activeSessionId) return
+    try {
+      await (format === 'html' ? downloadSessionHtmlReport : downloadSessionPdfReport)(activeSessionId)
+    } catch {
+      showToast('Failed to generate report')
     }
   }
 
@@ -326,6 +336,12 @@ export default function SessionsPanel() {
               <div className="sessions-panel__detail-actions">
                 <button className="btn btn--sm btn--secondary" onClick={handleExport} title="Export session as ZIP">
                   Export
+                </button>
+                <button className="btn btn--sm btn--secondary" onClick={() => handleReport('html')} title="Generate HTML report">
+                  Report (HTML)
+                </button>
+                <button className="btn btn--sm btn--secondary" onClick={() => handleReport('pdf')} title="Generate PDF report">
+                  Report (PDF)
                 </button>
                 <button className="btn btn--sm btn--secondary" onClick={handleShare}>
                   {session.hasShareToken ? 'Copy Link' : 'Share'}

@@ -53,12 +53,16 @@ public class InvestigationSessionRepository(IoTSpyDbContext db) : IInvestigation
             .ExecuteDeleteAsync(ct);
     }
 
-    public async Task<List<SessionCapture>> GetSessionCapturesAsync(Guid sessionId, CancellationToken ct = default)
-        => await db.SessionCaptures
+    public async Task<List<SessionCapture>> GetSessionCapturesAsync(Guid sessionId, int? limit = null, CancellationToken ct = default)
+    {
+        var query = db.SessionCaptures
             .Include(sc => sc.Capture)
             .Where(sc => sc.SessionId == sessionId)
             .OrderByDescending(sc => sc.AddedAt)
-            .ToListAsync(ct);
+            .AsQueryable();
+        if (limit.HasValue) query = query.Take(limit.Value);
+        return await query.ToListAsync(ct);
+    }
 
     public async Task<bool> ContainsCaptureAsync(Guid sessionId, Guid captureId, CancellationToken ct = default)
         => await db.SessionCaptures

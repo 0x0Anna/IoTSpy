@@ -4,6 +4,7 @@ import { useDevices } from '../../hooks/useDevices'
 import ScanJobList from './ScanJobList'
 import ScanFindingsView from './ScanFindingsView'
 import { ScheduledScansPanel } from './ScheduledScansPanel'
+import { downloadHtmlReport, downloadPdfReport } from '../../api/reports'
 import type { StartScanRequest } from '../../types/api'
 import '../../styles/scanner.css'
 
@@ -26,6 +27,16 @@ export default function ScannerPanel() {
   const [formConfigAudit, setFormConfigAudit] = useState(true)
   const [formConsent, setFormConsent] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
+
+  const handleReport = async (deviceId: string, format: 'html' | 'pdf') => {
+    setReportError(null)
+    try {
+      await (format === 'html' ? downloadHtmlReport : downloadPdfReport)(deviceId)
+    } catch {
+      setReportError('Failed to generate report')
+    }
+  }
 
   const handleScan = async () => {
     if (!formDeviceId) return
@@ -165,10 +176,27 @@ export default function ScannerPanel() {
           >
             {scanning ? 'Starting...' : 'Start Scan'}
           </button>
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={() => handleReport(formDeviceId, 'html')}
+            disabled={!formDeviceId}
+            title="Generate a report for the selected device (captures, protocol messages, and any scan findings on record)"
+          >
+            Report (HTML)
+          </button>
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={() => handleReport(formDeviceId, 'pdf')}
+            disabled={!formDeviceId}
+            title="Generate a report for the selected device (captures, protocol messages, and any scan findings on record)"
+          >
+            Report (PDF)
+          </button>
         </div>
       </div>
 
       {error && <div className="scan-error">{error}</div>}
+      {reportError && <div className="scan-error">{reportError}</div>}
 
       {/* Main content: job list + findings detail */}
       <div className="scanner-panel__body">
@@ -194,7 +222,24 @@ export default function ScannerPanel() {
                     {' '}({selectedJob.device.label || selectedJob.device.ipAddress})
                   </span>
                 )}
+                <span className="scanner-panel__report-actions">
+                  <button
+                    className="btn btn--sm btn--secondary"
+                    onClick={() => handleReport(selectedJob.deviceId, 'html')}
+                    title="Generate device report (HTML)"
+                  >
+                    Report (HTML)
+                  </button>
+                  <button
+                    className="btn btn--sm btn--secondary"
+                    onClick={() => handleReport(selectedJob.deviceId, 'pdf')}
+                    title="Generate device report (PDF)"
+                  >
+                    Report (PDF)
+                  </button>
+                </span>
               </div>
+              {reportError && <div className="scan-error">{reportError}</div>}
               {selectedJob.errorMessage && (
                 <div className="scan-error">{selectedJob.errorMessage}</div>
               )}
