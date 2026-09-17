@@ -11,7 +11,7 @@ See [PHASES-COMPLETED.md](PHASES-COMPLETED.md) for all completed work including 
 ## Future Enhancement Areas
 
 ### Scanner & Anomaly
-- **Scan findings correlation** — Group findings by vulnerability class, CVE, affected service; currently raw list only
+- **Scan findings correlation** — Client-side grouping by type/CVE/service *within* a single scan job's results shipped (`ScanFindingsView`, frontend-only); cross-scan-job / cross-device correlation ("this CVE affects 4 devices") is still open — there is no fleet-wide findings query surface today (`ScannerController` only exposes `jobs/{id}/findings`)
 - **Custom anomaly rules** — Declarative anomaly rules (similar to the manipulation rules engine) to flag specific traffic patterns; replaces purely statistical Welford baseline
 - **Behavioral fingerprinting** — Persistent per-device baseline across proxy restarts; detect changes in device communication patterns over time
 - **Behavioral inference / privacy-leakage module** — Infer occupant activity/routines from packet metadata alone (below TLS); see [PLAN-BEHAVIORAL-INFERENCE.md](PLAN-BEHAVIORAL-INFERENCE.md) for the full design
