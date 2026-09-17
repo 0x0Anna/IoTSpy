@@ -138,11 +138,20 @@
 }
 
 .scanner-panel__section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-text);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
+}
+
+.scanner-panel__report-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
 .scanner-panel__placeholder {

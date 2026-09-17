@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IoTSpy Report</title>
+<style>
+body{font-family:sans-serif;margin:2rem;color:#222}
+h1{color:#1a73e8}h2{margin-top:2rem}h3{margin-top:1.25rem}
+table{border-collapse:collapse;width:100%;margin-top:.5rem}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:.9em}
+th{background:#f0f0f0}
+.Critical{color:#b00020}.High{color:#e65100}.Medium{color:#f57c00}.Low{color:#388e3c}.Info{color:#1565c0}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.85em;font-weight:bold}
+.badge-Critical{background:#fdecea;color:#b00020}.badge-High{background:#fff3e0;color:#e65100}
+.badge-Medium{background:#fff8e1;color:#f57c00}.badge-Low{background:#e8f5e9;color:#388e3c}
+.badge-Info{background:#e3f2fd;color:#1565c0}
+.flag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.75em;background:#eee;margin-left:4px}
+.flag-warn{background:#fff3e0;color:#e65100}
+.muted{color:#777;font-style:italic}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.75em;background:#e3f2fd;color:#1565c0;margin-right:4px}
+</style>
+</head>
+<body>
+
+<h1>IoTSpy Security Report</h1>
+<p><strong>Scope:</strong> {{ ScopeLabel | html.escape }}</p>
+<p><strong>Generated:</strong> {{ GeneratedAt | fmt_date "yyyy-MM-dd HH:mm:ss" }} UTC</p>
+
+{{~ if Device ~}}
+<h2>Device Information</h2>
+<table>
+<tr><th>IP Address</th><td>{{ Device.IpAddress | html.escape }}</td></tr>
+<tr><th>MAC Address</th><td>{{ Device.MacAddress | html.escape }}</td></tr>
+<tr><th>Hostname</th><td>{{ Device.Hostname | html.escape }}</td></tr>
+<tr><th>Vendor</th><td>{{ Device.Vendor | html.escape }}</td></tr>
+<tr><th>Security Score</th><td>{{ if Device.SecurityScore == -1 }}Unscored{{ else }}{{ Device.SecurityScore }}{{ end }}</td></tr>
+<tr><th>First Seen</th><td>{{ Device.FirstSeen | fmt_date "yyyy-MM-dd HH:mm" }}</td></tr>
+<tr><th>Last Seen</th><td>{{ Device.LastSeen | fmt_date "yyyy-MM-dd HH:mm" }}</td></tr>
+</table>
+{{~ end ~}}
+
+{{~ if Session ~}}
+<h2>Session Information</h2>
+<table>
+<tr><th>Name</th><td>{{ Session.Name | html.escape }}</td></tr>
+<tr><th>Description</th><td>{{ Session.Description | html.escape }}</td></tr>
+<tr><th>Created By</th><td>{{ Session.CreatedByUsername | html.escape }}</td></tr>
+<tr><th>Created At</th><td>{{ Session.CreatedAt | fmt_date "yyyy-MM-dd HH:mm" }}</td></tr>
+<tr><th>Status</th><td>{{ if Session.IsActive }}Active{{ else }}Closed{{ end }}</td></tr>
+</table>
+
+<h2>Activity Feed</h2>
+{{~ if Activities.size == 0 ~}}
+<p class="muted">No recorded activity.</p>
+{{~ else ~}}
+<table><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th></tr>
+{{~ for a in Activities ~}}
+<tr><td>{{ a.Timestamp | fmt_date "yyyy-MM-dd HH:mm" }}</td><td>{{ a.Username | html.escape }}</td><td>{{ a.Action | html.escape }}</td><td>{{ a.Details | html.escape }}</td></tr>
+{{~ end ~}}
+</table>
+{{~ end ~}}
+{{~ end ~}}
+
+<h2>Findings by Severity</h2>
+{{~ for grp in FindingsBySeverity ~}}
+<h3><span class="badge badge-{{ grp.Severity }}">{{ grp.Severity }}</span> ({{ grp.Findings.size }} findings)</h3>
+{{~ if grp.Findings.size == 0 ~}}
+<p class="muted">No findings.</p>
+{{~ else ~}}
+<table><tr><th>Type</th><th>Title</th><th>Description</th><th>Port</th><th>CVE</th><th>Found At</th></tr>
+{{~ for f in grp.Findings ~}}
+<tr>
+<td>{{ f.Type }}</td>
+<td>{{ f.Title | html.escape }}</td>
+<td>{{ f.Description | html.escape }}</td>
+<td>{{ f.Port }}</td>
+<td>{{ f.CveId | html.escape }}</td>
+<td>{{ f.FoundAt | fmt_date "yyyy-MM-dd HH:mm" }}</td>
+</tr>
+{{~ end ~}}
+</table>
+{{~ end ~}}
+{{~ end ~}}
+
+<h2>Captures ({{ Captures.size }})</h2>
+{{~ if Captures.size == 0 ~}}
+<p class="muted">No captures in scope.</p>
+{{~ else ~}}
+<table>
+<tr><th>Time</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Duration (ms)</th><th>TLS</th></tr>
+{{~ for c in Captures ~}}
+<tr>
+<td>{{ c.Timestamp | fmt_date "yyyy-MM-dd HH:mm:ss" }}</td>
+<td>{{ c.Method | html.escape }}</td>
+<td>{{ c.Host | html.escape }}</td>
+<td>{{ c.Path | html.escape }}</td>
+<td>{{ c.StatusCode }}</td>
+<td>{{ c.DurationMs }}</td>
+<td>
+{{~ if c.IsTls ~}}{{ c.TlsVersion | html.escape }}{{ if c.TlsSni }} (SNI: {{ c.TlsSni | html.escape }}){{ end }}{{ if c.TlsLikelyDot }}<span class="flag flag-warn">likely DoT</span>{{ end }}{{~ else ~}}—{{~ end ~}}
+</td>
+</tr>
+{{~ end ~}}
+</table>
+{{~ end ~}}
+
+<h2>Protocol Messages ({{ ProtocolMessages.size }})</h2>
+{{~ if ProtocolMessages.size == 0 ~}}
+<p class="muted">No MQTT/DNS protocol messages recorded in scope.</p>
+{{~ else ~}}
+<table>
+<tr><th>Time</th><th>Protocol</th><th>Direction</th><th>Subject</th><th>Summary</th></tr>
+{{~ for m in ProtocolMessages ~}}
+<tr>
+<td>{{ m.Timestamp | fmt_date "yyyy-MM-dd HH:mm:ss" }}</td>
+<td>{{ m.Protocol }}</td>
+<td>{{ m.Direction | html.escape }}</td>
+<td>{{ m.Subject | html.escape }}</td>
+<td>{{ m.Summary | html.escape }}</td>
+</tr>
+{{~ end ~}}
+</table>
+{{~ end ~}}
+
+{{~ if Session ~}}
+<h2>Annotations ({{ Annotations.size }})</h2>
+{{~ if Annotations.size == 0 ~}}
+<p class="muted">No annotations recorded.</p>
+{{~ else ~}}
+<table>
+<tr><th>Time</th><th>User</th><th>Note</th><th>Tags</th></tr>
+{{~ for a in Annotations ~}}
+<tr>
+<td>{{ a.CreatedAt | fmt_date "yyyy-MM-dd HH:mm" }}</td>
+<td>{{ a.Username | html.escape }}</td>
+<td>{{ a.Note | html.escape }}</td>
+<td>{{~ if a.Tags ~}}{{~ for tag in (a.Tags | string.split ",") ~}}<span class="tag">{{ tag | html.escape }}</span>{{~ end ~}}{{~ end ~}}</td>
+</tr>
+{{~ end ~}}
+</table>
+{{~ end ~}}
+{{~ end ~}}
+
+</body>
+</html>

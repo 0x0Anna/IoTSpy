@@ -12,14 +12,14 @@ Severity legend: **Critical** = ship blocker · **High** = next-sprint · **Medi
 
 | State | Count | Items |
 |---|---|---|
-| ✅ Completed | 51 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47, #49, #50, #55, #57 |
+| ✅ Completed | 52 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47, #49, #50, #55, #57 |
 | ⏳ In-flight (open PR) | 0 | — |
 | 🟥 Critical remaining | 0 | — |
 | 🟧 High remaining | 0 | — |
-| 🟨 Medium remaining | 2 | #33, #48 |
+| 🟨 Medium remaining | 1 | #48 |
 | 🟩 Low remaining | 7 | #51–#54, #56, #58, #59 |
 
-PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43), **#89/#90/#91/#92** (protocol coverage #44 — one PR per protocol: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT detection).
+PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), **#61** (test backfill), **#62** (responsive pass), **#63** (security hardening), **#66** (auth: session expiry redirect, multi-user login), **#68** (modal system: #20, #21, #49, #50), **#69** (crash resilience: #8), **feature/scan-scope-consent-gate** (scan scope enforcement + consent gate: #4, #45), **feature/replay-fuzzer-tls-opt-in** (Replay/Fuzzer TLS bypass opt-in: #13), **feature/plugin-signing-audit-tiered-retention** (plugin signing: #16; audit tiered retention: #46), **feature/config-export-import-polish** (incomplete-feature polish: #29, #30, #31, #32, #34, #35), **feature/capture-curl-diff** (Researcher persona: #36, #39, #55), **feature/replay-override-cvss-tests** (Pen-tester persona: #38, #57; #56 investigated and deliberately deferred), **feature/har-import-backup-alerts** (Developer + Admin personas: #37, #40, #41, #42, #43), **#89/#90/#91/#92** (protocol coverage #44 — one PR per protocol: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT detection), **feature/protocol-message-persistence** + **feature/report-redesign-scriban** (report redesign #33 — persistence infrastructure then Scriban-templated device/session reports).
 
 ---
 
@@ -32,11 +32,6 @@ PR history that closed items: **#59** (day-0 hotfixes), **#60** (doc accuracy), 
 ---
 
 ## 🟨 Medium — remaining
-
-### Incomplete shipped features
-
-**33. Report covers scan findings only** — `ReportService.cs:50` only loads `ScanJob` + `ScanFinding`. No captures, TLS metadata, annotations, MQTT/DNS messages. Not a usable pen-test deliverable. Redesign report sections + template system.
-  - *Status: persistence prerequisite landed on `feature/protocol-message-persistence`* — new `PersistedProtocolMessage` table + `IProtocolMessageRepository`, MQTT messages persisted from `MqttBrokerProxy` (device-resolved, batched via bounded channel), DoH-decoded DNS queries persisted from both proxy servers' real HTTP(S) capture sites (this also wired up `DohDetector`/`DotDetector`, which had shipped in #92 but were never actually called from a live capture path), plus a `ProtocolMessageRetentionDays` tier. #33 itself is **not** closed by this — the report redesign (Scriban templates, device + session scoped endpoints, QuestPDF update, frontend wiring) is a separate follow-up PR that can now proceed since the data it needs exists.
 
 ### Trust & safety
 
@@ -163,19 +158,21 @@ Shipped as four independent PRs, one per protocol, per the item's own "Slot: `Io
 
 All four branched off the same `main` commit in parallel isolated worktrees; PR #90 needed a post-review rebase to resolve a trivial conflict on `InterceptionProtocol.cs` (each PR added its own enum value to the same list) after #89/#91/#92 merged first.
 
+### Incomplete shipped features (1 of 1) ✅
+
+- **#33 — Report redesign** [branches: feature/protocol-message-persistence, feature/report-redesign-scriban] — `ReportService.cs` previously only loaded `ScanJob`+`ScanFinding` for a single device; not a usable pen-test deliverable. Shipped as two PRs given the scope. First landed the persistence prerequisite: `PersistedProtocolMessage` table + `IProtocolMessageRepository`, MQTT messages persisted from `MqttBrokerProxy`, DoH-decoded DNS queries persisted from both proxy servers' HTTP(S) capture sites (this also wired up `DohDetector`/`DotDetector`, shipped in #92 but never actually called from a live capture path until now). Second introduced Scriban (first templated text asset in the solution) for HTML rendering, expanded `ReportDataLoader` to aggregate captures (with parsed TLS metadata), scan findings, protocol messages, and — for session-scoped reports — annotations and the activity feed; added device- and session-scoped endpoints (`GET /api/reports/{devices,sessions}/{id}/{html,pdf}`); QuestPDF PDF path updated to match; frontend `api/reports.ts` (previously zero callers) wired into `ScannerPanel` and `SessionsPanel`. All user-controlled template fields are HTML-escaped (verified by a dedicated test), since Scriban doesn't auto-escape.
+
 ---
 
 ## Recommended next PRs
 
-Updated after #89/#90/#91/#92 (protocol coverage) landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
+Updated after #33 (report redesign) landed. All Critical, High, and every persona-PR's Medium/Low items are now resolved except #56 (deliberately deferred) and the two items below. Remaining PRs in priority order:
 
-1. **Report redesign** — #33. `ReportService` only covers scan findings today; not a usable pen-test deliverable without captures, TLS metadata, annotations, and protocol messages.
+1. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
 
-2. **Per-user data isolation PR** — #48. Row-level ownership filter helper in `IoTSpy.Storage`; applied across captures, scans, and device queries. Touches many controllers; bundle as a single multi-controller PR.
+2. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
 
-3. **Operational observability** — #51 (OTEL tracing), #52 (broader Prometheus metrics), #53 (Grafana dashboards), #54 (runbook). Each independent; pick up in any order.
-
-4. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
+3. **SSO/OIDC** — #59. Largest single feature in the Low tier; only prioritize if a customer is asking.
 
 Each item above is sized to fit a focused PR. Avoid bundling across categories — the cleaner the diff, the easier the review.
 
