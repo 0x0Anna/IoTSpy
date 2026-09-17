@@ -43,6 +43,10 @@ IoT network security platform: transparent MITM proxy, protocol analyzer, pen-te
 - **gRPC / Protobuf** — Length-Prefixed Message framing + schema-less protobuf field extraction
 - **Modbus TCP** — MBAP header parsing, function codes 1-16, exception responses
 - **OpenRTB 2.5** — bid request/response parsing with PII detection and policy-based redaction
+- **MQTT-SN** — core OASIS v1.2 message set for constrained-device UDP traffic (CONNECT/CONNACK, REGISTER/REGACK, PUBLISH/PUBACK, SUBSCRIBE/SUBACK, ADVERTISE/GWINFO, etc.), short-form and extended-length framing
+- **RTSP / RTP** — RFC 2326 request/response decoding (DESCRIBE/SETUP/PLAY/etc.) with SDP metadata extraction and an unauthenticated-stream signal; RFC 3550 RTP fixed-header decode, including RTSP interleaved binary framing
+- **AMQP 1.0** — protocol-header handshake + performative decoding (open/begin/attach/flow/transfer/disposition/detach/end/close) with headline field extraction
+- **DoH / DoT detection** — recognizes and decodes DNS-over-HTTPS (RFC 8484) requests via the existing DNS decoder; flags DNS-over-TLS via port 853 / known-resolver SNI heuristics
 - **Telemetry decoders** — Datadog, AWS Firehose, Splunk HEC, Azure Monitor
 
 ### Security scanning
@@ -530,11 +534,11 @@ IoTSpy.sln
 src/
   IoTSpy.Core/          # Domain models, interfaces, enums
   IoTSpy.Proxy/         # Explicit + transparent proxy, TLS MITM, ARP spoof, resilience
-  IoTSpy.Protocols/     # Protocol decoders (MQTT, DNS, CoAP, OpenRTB, telemetry)
+  IoTSpy.Protocols/     # Protocol decoders (MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, telemetry)
   IoTSpy.Scanner/       # Port scan, fingerprinting, CVE lookup, packet capture
   IoTSpy.Manipulation/  # Rules engine, replay, fuzzer, AI mock, OpenRTB PII, packet analysis, API spec generation, content replacement
   IoTSpy.Storage/       # EF Core DbContext, repositories, migrations
-  IoTSpy.Api/           # ASP.NET Core host, 20 controllers, 3 SignalR hubs
+  IoTSpy.Api/           # ASP.NET Core host, 22 controllers, 3 SignalR hubs
 frontend/               # Vite 6 + React 19 + TypeScript dashboard
 docs/
   ARCHITECTURE.md       # Full architecture spec
@@ -570,7 +574,7 @@ cd frontend && npm run dev
 
 See [`docs/PLAN-INDEX.md`](docs/PLAN-INDEX.md) for the full implementation plan, identified gaps, and forward-looking roadmap.
 
-> **956 backend tests** across 9 test projects; 125 frontend component tests; Playwright E2E suite. All passing.
+> **1022 backend tests** across 9 test projects; 125 frontend component tests; Playwright E2E suite. All passing.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -597,6 +601,9 @@ See [`docs/PLAN-INDEX.md`](docs/PLAN-INDEX.md) for the full implementation plan,
 | 20 | Admin UI & body viewer stream rendering | **Complete** |
 | 16 | Deployment/operations (Helm, Docker Compose, CI/CD) | **Complete** |
 | 21 | Passive proxy mode — observe-only, device IP filter, named sessions | **Complete** |
+| 22 | Content-aware mocking depth (SSE/binary/range-sliced replacement); standalone content rules decoupled from API specs | **Complete** |
+
+All numbered phases are complete. See [`docs/CODE-REVIEW-FINDINGS.md`](docs/CODE-REVIEW-FINDINGS.md) for the live post-phase backlog board and [`docs/PHASES-ROADMAP.md`](docs/PHASES-ROADMAP.md) for larger unnumbered future enhancement areas.
 
 ---
 

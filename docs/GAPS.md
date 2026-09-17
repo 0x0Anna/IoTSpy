@@ -8,7 +8,7 @@ This document tracks remaining gaps, known limitations, and technical debt. Item
 
 | Gap | Description | Severity | Status | Notes |
 |---|---|---|---|---|
-| No LDAP / SAML SSO | Enterprise single sign-on not implemented | Low | Open | Deprioritized in Phase 16.5; valid candidate for future work |
+| No LDAP / SAML SSO | Enterprise single sign-on not implemented | Low | Open | Deprioritized in Phase 16.5; tracked as the live backlog item [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md) #59 (SSO/OIDC) — see that doc for current prioritization, not this one |
 | No distributed / multi-node mode | Single-instance proxy per deployment; horizontal scaling requires Redis backplane | Low | Open | Deprioritized in Phase 16.8; see Design Assumptions |
 | No Bluetooth/Zigbee/Z-Wave | IoT protocols beyond IP-based networking are not supported | Low | Open | See Phase 17 for future work |
 | Dashboard layout persistence | Per-user saved layout/filter presets with full CRUD; DB model, repo, and API all implemented; zero frontend exposure | Low | Open | Backend: `GET/POST/PUT/DELETE /api/dashboard/layouts` |
@@ -46,7 +46,7 @@ Decoders exist for all major protocols but vary in depth:
 
 | Protocol | Current depth | Enhancement opportunity |
 |---|---|---|
-| DNS | Basic query/response, label decompression, **EDNS0 OPT record parsed** | DNSSEC validation chain, DoH/DoT detection |
+| DNS | Basic query/response, label decompression, **EDNS0 OPT record parsed**, **DoH/DoT detection** (`DohDetector`/`DotDetector`, see `docs/CODE-REVIEW-FINDINGS.md` #44) | DNSSEC validation chain |
 | CoAP | RFC 7252 decode, **Block-wise transfer (Block1/Block2), Observe option, .well-known/core** | — |
 | gRPC | **Schema-less LPM + gRPC-Web trailer detection; `.proto` upload resolves field names** (`ProtoParser`, `ProtoSchemasController`) | — |
 | MQTT | Full 3.1.1/5.0 decode, **topic statistics + QoS-2 flow tracking via MqttSessionAnalyzer** | — |
@@ -113,7 +113,7 @@ All previously open items resolved — see Resolved Items below.
 
 ## Suggestions for Next Contributors
 
-1. **Add frontend component tests** — manipulation, capture, and sessions panels have no spec coverage
+Frontend component test coverage (manipulation, capture, sessions panels, and more) shipped in Gaps Batch 4 and after — see "Resolved Items" below. For current suggestions, check [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)'s "Recommended next PRs" section, which is the live backlog board.
 
 See [AGENT-NOTES.md](AGENT-NOTES.md) for session setup and testing instructions.
 

@@ -43,7 +43,7 @@ IoTSpy.Api          ASP.NET Core host — controllers, SignalR hubs, middleware
 IoTSpy.Core         Domain models, interfaces, enums (no infrastructure deps)
 IoTSpy.Proxy        TLS MITM/passthrough, SSL stripping, WebSocket/MQTT/CoAP proxies
 IoTSpy.Storage      EF Core DbContext + repositories (SQLite/Postgres)
-IoTSpy.Protocols    MQTT, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, telemetry decoders
+IoTSpy.Protocols    MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, telemetry decoders
 IoTSpy.Scanner      Port scan, fingerprinting, CVE lookup, packet capture
 IoTSpy.Manipulation Rules engine, scripted breakpoints, replay, fuzzer, AI mock, OpenRTB PII, API spec generation, content replacement
 IoTSpy.*.Tests      Unit + integration tests
@@ -79,7 +79,7 @@ See `.claude/skills/README.md` for full details.
 ## Current state
 
 All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhancements, Gaps Batches 4, 5, and 6 are complete:
-- 956 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1029 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
+- 1022 backend `[Fact]`/`[Theory]` attributes across 9 test projects (1099 executed test cases); 125 frontend component tests; Playwright E2E suite (auth, captures, dashboard, manipulation)
 - 22 REST controllers, 214 endpoints
 - 28 EF Core migrations up through `AddAlertOnMatch`
 - GitHub Actions CI at `.github/workflows/ci.yml`
@@ -87,7 +87,15 @@ All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhance
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### feature/har-import-backup-alerts (latest)
+### Protocol coverage: RTSP/RTP, AMQP 1.0, MQTT-SN, DoH/DoT (latest)
+`docs/CODE-REVIEW-FINDINGS.md` #44, shipped as four independent decoder-only PRs (#89-#92), one per protocol — no new live-intercepting proxy/listener for any of them:
+- RTSP/RTP (#89): `RtspDecoder` (RFC 2326) + `SdpInfo` (lightweight RFC 4566 parser) + `RtpDecoder` (RFC 3550 §5.1, unwraps RTSP's `$`-interleaved framing)
+- AMQP 1.0 (#90): `AmqpDecoder` — protocol-header handshake + all 9 performative types by descriptor code, headline-field extraction for `open`/`transfer`, generic type-width walker skips unsupported encodings
+- MQTT-SN (#91): `MqttSnDecoder` — core OASIS v1.2 message set, short-form + extended-length framing, follows `MqttDecoder`'s structure
+- DoH/DoT (#92): `DohDetector` (decodes the embedded DNS message via the existing `DnsDecoder`, not just a flag) + `DotDetector` (port 853 / known-resolver-SNI heuristic)
+- Added `Rtsp`/`Rtp`/`Amqp`/`MqttSn`/`DohDetected` to `InterceptionProtocol`
+
+### feature/har-import-backup-alerts (previous)
 `docs/CODE-REVIEW-FINDINGS.md` Developer + Admin persona items #37, #40, #41, #42, #43:
 - HAR import (#37): `POST /api/captures/import/har` parses `log.entries[]` into `CapturedRequest`s, bulk-inserted via `ICaptureRepository.AddBatchAsync`; malformed entries skipped and counted, not fatal
 - In-app alerts (#40, full stack): opt-in `AlertOnMatch: bool` on `ManipulationRule`/`Breakpoint` (migration `AddAlertOnMatch`) — rule/breakpoint firing didn't call `IAlertingService` at all before this, and alerting unconditionally on every proxied request would flood external channels; `AlertingService` gains an `InApp` channel broadcasting via `IHubContext<CollaborationHub>.Clients.All`; frontend `useAlertNotifications` hook + `AlertToastStack` component mounted in `DashboardPage`

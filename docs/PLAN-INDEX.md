@@ -33,13 +33,13 @@ This is the primary navigation hub for all project planning, architecture, and i
 | Metric | Value |
 |---|---|
 | **Phases complete** | 1–16, 18–22 + API & Backend Polish + Frontend Usability |
-| **Backend tests** | 610 (all passing, last verified 2026-04-29) |
-| **Controllers** | 19 REST + 3 SignalR hubs |
-| **Migrations** | 19 |
-| **Protocols supported** | HTTP/HTTPS, MQTT, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, Telemetry |
+| **Backend tests** | 1022 `[Fact]`/`[Theory]` attributes, 1099 executed (all passing, last verified 2026-09-17) |
+| **Controllers** | 22 REST + 3 SignalR hubs |
+| **Migrations** | 28 |
+| **Protocols supported** | HTTP/HTTPS, MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, Telemetry |
 | **Proxy modes** | 3 (explicit, gateway, ARP spoof) |
 | **Auth** | Multi-user RBAC (Admin/Operator/Viewer) |
-| **Frontend** | Vite 6 + React 19 + TypeScript (82+ components) |
+| **Frontend** | Vite 6 + React 19 + TypeScript, 125 component tests |
 
 ---
 
@@ -192,6 +192,5 @@ A: See [PHASES-ROADMAP.md](PHASES-ROADMAP.md#future-enhancement-areas-phases-22)
 
 ---
 
-**Last updated:** April 2026  
-**Total phases completed:** 20 of 20 core features  
-**Active contributors welcome** — start with [AGENT-NOTES.md](AGENT-NOTES.md) and [GAPS.md](GAPS.md)
+**Last updated:** September 2026  
+**Active contributors welcome** — start with [AGENT-NOTES.md](AGENT-NOTES.md), [GAPS.md](GAPS.md), and the live backlog board at [CODE-REVIEW-FINDINGS.md](CODE-REVIEW-FINDINGS.md)

@@ -47,7 +47,7 @@ src/
   IoTSpy.Core/                 Domain models, interfaces, enums — no infrastructure deps
   IoTSpy.Proxy/                TCP listener, TLS MITM/passthrough, SSL stripping, Polly resilience
   IoTSpy.Storage/              EF Core DbContext + repositories (SQLite/Postgres)
-  IoTSpy.Protocols/            MQTT, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, telemetry decoders
+  IoTSpy.Protocols/            MQTT, MQTT-SN, DNS, CoAP, WebSocket, gRPC, Modbus, OpenRTB, RTSP/RTP, AMQP 1.0, DoH detection, telemetry decoders
   IoTSpy.Scanner/              Port scan, service fingerprinting, CVE lookup, packet capture
   IoTSpy.Manipulation/         Rules engine, scripted breakpoints, replay, fuzzer, AI mock, OpenRTB PII, API spec generation, content replacement
   IoTSpy.*.Tests/              Unit + integration tests (NSubstitute mocks, EF Core in-memory)
@@ -55,7 +55,7 @@ src/
 frontend/                      Vite + React + TypeScript dashboard
 docs/
   ARCHITECTURE.md              Full architecture spec
-  PLAN.md                      Phased task list and roadmap
+  PLAN-INDEX.md                Navigation hub; links to PHASES-*.md and CODE-REVIEW-FINDINGS.md (the live backlog board)
 ```
 
 ### Dependency graph

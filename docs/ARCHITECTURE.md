@@ -256,8 +256,15 @@ public interface IProtocolDecoder<T>
 | `WebSocket/` | `WebSocketDecoder` | `WebSocketDecodedFrame` | RFC 6455 frame decoding; `DetectedSubProtocol: WsSubProtocol?` — STOMP, WAMP, or MQTT-over-WS via payload heuristics |
 | `Grpc/` | `GrpcDecoder` | `GrpcMessage` | gRPC Length-Prefixed Message framing + schema-less protobuf field extraction |
 | `Modbus/` | `ModbusDecoder` | `ModbusMessage` | Modbus TCP MBAP header, function codes 1-16 + exception responses |
+| `MqttSn/` | `MqttSnDecoder` | `MqttSnMessage` | OASIS MQTT-SN v1.2 core message set; short-form and extended (>255-byte) length framing |
+| `Rtsp/` | `RtspDecoder` | `RtspMessage` | RFC 2326 request/status lines + headers + `SdpInfo` (RFC 4566) from `application/sdp` bodies |
+| `Rtsp/` | `RtpDecoder` | `RtpPacket` | RFC 3550 §5.1 fixed header; unwraps RTSP's `$`-prefixed interleaved binary framing |
+| `Amqp/` | `AmqpDecoder` | `AmqpMessage` | AMQP 1.0 protocol-header handshake + all 9 performative types by descriptor code (headline fields only — depth over completeness) |
+| `Doh/` | `DohDetector` | `DohDetectionResult` | Detection-only (not `IProtocolDecoder<T>`): RFC 8484 DoH framing on an already-decoded HTTP request, decodes the embedded query via `DnsDecoder` |
 
 `TelemetryMessage` carries: detected protocol, source, timestamp, flat `Fields` map, per-event `Events` list, raw JSON (capped at 8 KB).
+
+DoT (DNS-over-TLS) detection lives alongside the TLS layer, not here: `IoTSpy.Proxy/Tls/DotDetector.IsLikelyDot` flags a ClientHello as likely DoT via destination port 853 or a known-resolver SNI allowlist (encrypted TLS payload gives no further visibility).
 
 ### Anomaly detection (`Anomaly/AnomalyDetector`)
 
@@ -657,7 +664,7 @@ frontend/src/
 
 ## Test projects
 
-**956 backend tests** across 9 test projects + 125 frontend component tests. All passing. Coverage reported via Coverlet + ReportGenerator in CI. Test coverage includes Phase 10 decoders, Phase 11 multi-user/TLS/tests, Phase 12 API spec generation, Phase 14 API keys, Phase 15 collaboration, Phase 20 admin/integration tests, Gaps Batch 5 (CoAP Block-wise/Observe, DNS EDNS0, WebSocket sub-protocol detection, MQTT topic statistics, rule cache), Gaps Batch 6 (gRPC schema upload, audit write-once trigger), the modal-system pass (RulePreviewModal accessibility + focus trap), scan-scope/consent-gate (CIDR enforcement, scope CRUD, CancellationToken hardening across all test files), and plugin-signing/audit-retention (PluginSignatureVerifier trust status + RSA/ECDSA crypto path coverage, DataRetentionService audit archiving).
+**1022 backend tests** across 9 test projects + 125 frontend component tests. All passing. Coverage reported via Coverlet + ReportGenerator in CI. Test coverage includes Phase 10 decoders, Phase 11 multi-user/TLS/tests, Phase 12 API spec generation, Phase 14 API keys, Phase 15 collaboration, Phase 20 admin/integration tests, Gaps Batch 5 (CoAP Block-wise/Observe, DNS EDNS0, WebSocket sub-protocol detection, MQTT topic statistics, rule cache), Gaps Batch 6 (gRPC schema upload, audit write-once trigger), the modal-system pass (RulePreviewModal accessibility + focus trap), scan-scope/consent-gate (CIDR enforcement, scope CRUD, CancellationToken hardening across all test files), and plugin-signing/audit-retention (PluginSignatureVerifier trust status + RSA/ECDSA crypto path coverage, DataRetentionService audit archiving).
 
 | Project | Test classes | Coverage |
 |---|---|---|
