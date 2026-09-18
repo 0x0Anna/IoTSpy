@@ -189,7 +189,7 @@ public class TransparentProxyServer(
 
         // Connect to real upstream — per-host pipeline.
         var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
         {
             await upstreamTcp.ConnectAsync(host, port, token);
             return upstreamTcp;
@@ -223,7 +223,7 @@ public class TransparentProxyServer(
 
         // Connect to real upstream — per-host pipeline.
         var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
         {
             await upstreamTcp.ConnectAsync(host, port, token);
             return upstreamTcp;
@@ -305,7 +305,7 @@ public class TransparentProxyServer(
         // Connect upstream — per-host pipeline; use SNI hostname if available.
         var upstream = new TcpClient();
         var sniOrHost = sniHost != host ? sniHost : host;
-        await perHostPipelines.GetPipeline(sniOrHost).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(sniOrHost, port).ExecuteAsync(async token =>
         {
             await upstream.ConnectAsync(sniOrHost, port, token);
             return upstream;
@@ -525,7 +525,7 @@ public class TransparentProxyServer(
             if (!string.IsNullOrEmpty(reqLine))
                 await WriteHttpMessageAsync(upstreamStream, reqLine, reqHeaders, reqBodyBytes, ct);
 
-            var (statusLine, respHeaders, respBody, respBodyBytes) = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct);
+            var (statusLine, respHeaders, respBody, respBodyBytes) = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
 
             // Decode Content-Encoding for storage (original compressed bytes still forwarded to client)
             if (respBodyBytes.Length > 0)
@@ -631,12 +631,12 @@ public class TransparentProxyServer(
                 Path = path,
                 Query = query,
                 RequestHeaders = reqHeaders,
-                RequestBody = settings.CaptureRequestBodies ? reqBody : string.Empty,
+                RequestBody = settings.CaptureRequestBodies ? TruncateForStorage(reqBody, settings.MaxBodySizeKb) : string.Empty,
                 RequestBodySize = reqBodyBytes.Length,
                 StatusCode = statusCode,
                 StatusMessage = statusMsg,
                 ResponseHeaders = respHeaders,
-                ResponseBody = settings.CaptureResponseBodies ? respBody : string.Empty,
+                ResponseBody = settings.CaptureResponseBodies ? TruncateForStorage(respBody, settings.MaxBodySizeKb) : string.Empty,
                 ResponseBodySize = respBodyBytes.Length,
                 IsTls = scheme == "https",
                 TlsVersion = tlsVersion,
@@ -871,8 +871,13 @@ public class TransparentProxyServer(
         return await devices.UpsertByIpAsync(new Device { IpAddress = ip }, ct);
     }
 
+    // Hard ceiling on bytes read for a single message body, independent of the
+    // user-configurable MaxBodySizeKb (which only caps what gets persisted for review).
+    // Purely a memory-safety backstop against a pathological Content-Length.
+    private const int WireBodySafetyCeilingBytes = 200 * 1024 * 1024;
+
     private static async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> ReadHttpMessageAsync(
-        Stream stream, int maxBodyKb, CancellationToken ct)
+        Stream stream, int maxBodyKb, CancellationToken ct, bool isResponse = false)
     {
         string? firstLine = null;
         var headerLines = new List<string>();
@@ -896,37 +901,80 @@ public class TransparentProxyServer(
         byte[] bodyBytes = [];
         var body = string.Empty;
 
-        if (contentLength > 0)
+        // Per RFC 7230 §3.3.3 rule 1: a response with a 1xx, 204, or 304 status code is
+        // always terminated by the header block alone and can never have a body, no matter
+        // what Content-Length/Transfer-Encoding headers say. These respond over a
+        // keep-alive connection the server has no intention of closing, so treating them
+        // as close-delimited (or trusting a stray Content-Length) can hang forever waiting
+        // for bytes that will never arrive.
+        var noBody = isResponse && firstLine is not null && IsBodylessStatus(firstLine);
+
+        if (noBody)
         {
-            var maxBytes = maxBodyKb * 1024;
-            var readLen = Math.Min(contentLength, maxBytes);
+            // No body to read — leave bodyBytes/body empty regardless of what the
+            // (possibly stray/incorrect) headers claim.
+        }
+        else if (contentLength > 0)
+        {
+            var readLen = Math.Min(contentLength, WireBodySafetyCeilingBytes);
             bodyBytes = new byte[readLen];
             await stream.ReadExactlyAsync(bodyBytes, ct);
             body = Encoding.UTF8.GetString(bodyBytes);
-            if (contentLength > maxBytes)
+            if (contentLength > WireBodySafetyCeilingBytes)
             {
-                var drain = new byte[contentLength - maxBytes];
+                var drain = new byte[contentLength - WireBodySafetyCeilingBytes];
                 await stream.ReadExactlyAsync(drain, ct);
             }
         }
         else if (chunked)
         {
-            (bodyBytes, body) = await ReadChunkedBodyAsync(stream, maxBodyKb * 1024, ct);
+            (bodyBytes, body) = await ReadChunkedBodyAsync(stream, WireBodySafetyCeilingBytes, ct);
+        }
+
+        var closeDelimited = false;
+        if (isResponse && !noBody && contentLength <= 0 && !chunked)
+        {
+            // Neither Content-Length nor chunked encoding: per RFC 7230 §3.3.3 this is only
+            // legal for a response, whose body is then delimited by the connection closing.
+            // Common for simple/embedded local HTTP(S) servers (IoT devices, HTTP/1.0-style
+            // servers). Read until EOF — the connection is done after this message either way.
+            (bodyBytes, body) = await ReadUntilCloseAsync(stream, WireBodySafetyCeilingBytes, ct);
+            closeDelimited = true;
         }
 
         // Normalize headers: replace Transfer-Encoding and Content-Length to match actual body bytes
-        if (chunked || (contentLength > 0 && bodyBytes.Length != contentLength))
+        if (chunked || closeDelimited || (contentLength > 0 && bodyBytes.Length != contentLength))
         {
             var fixedLines = headerLines
                 .Where(l => !l.StartsWith("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
-                         && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                         && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)
+                         && !(closeDelimited && l.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase)))
                 .ToList();
+            if (closeDelimited)
+                fixedLines.Add("Connection: close");
             if (bodyBytes.Length > 0)
                 fixedLines.Add($"Content-Length: {bodyBytes.Length}");
             headers = string.Join("\r\n", fixedLines);
         }
 
         return (firstLine, headers, body, bodyBytes);
+    }
+
+    private static async Task<(byte[] bytes, string text)> ReadUntilCloseAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var rawList = new List<byte>();
+        var buf = new byte[8192];
+        int read;
+        while ((read = await stream.ReadAsync(buf, ct)) > 0)
+        {
+            if (rawList.Count < maxBytes)
+            {
+                var take = Math.Min(read, maxBytes - rawList.Count);
+                rawList.AddRange(buf.AsSpan(0, take));
+            }
+        }
+        var bytes = rawList.ToArray();
+        return (bytes, Encoding.UTF8.GetString(bytes));
     }
 
     private static async Task<(byte[] bytes, string text)> ReadChunkedBodyAsync(Stream stream, int maxBytes, CancellationToken ct)
@@ -976,6 +1024,21 @@ public class TransparentProxyServer(
         if (byteCount > 0)
             lines.Add($"Content-Length: {byteCount}");
         return string.Join("\r\n", lines);
+    }
+
+    // Caps only what gets persisted to the capture DB for review — never applied to bytes
+    // actually forwarded on the wire (see WireBodySafetyCeilingBytes).
+    private static string TruncateForStorage(string body, int maxBodyKb)
+    {
+        var maxChars = maxBodyKb * 1024;
+        return body.Length > maxChars ? body[..maxChars] : body;
+    }
+
+    private static bool IsBodylessStatus(string statusLine)
+    {
+        var parts = statusLine.Split(' ', 3);
+        if (parts.Length < 2 || !int.TryParse(parts[1], out var code)) return false;
+        return code is 204 or 304 || (code >= 100 && code < 200);
     }
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)

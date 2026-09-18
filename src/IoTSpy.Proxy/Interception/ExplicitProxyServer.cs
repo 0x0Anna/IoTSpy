@@ -204,7 +204,7 @@ public class ExplicitProxyServer(
         // Resilient connect to upstream — per-host pipeline so one dead endpoint
         // does not open the circuit for all other upstream targets.
         var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
         {
             await upstreamTcp.ConnectAsync(host, port, token);
             return upstreamTcp;
@@ -235,28 +235,27 @@ public class ExplicitProxyServer(
         NetworkStream clientStream, string requestLine,
         string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct)
     {
-        var lines = new List<string> { requestLine };
-        string? hostHeader = null;
-        while (true)
-        {
-            var line = await ReadLineAsync(clientStream, ct);
-            lines.Add(line ?? "");
-            if (string.IsNullOrEmpty(line)) break;
-            if (line.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
-                hostHeader = line[5..].Trim();
-        }
+        // Parse the full first request up front (headers + body, if any) using the same
+        // reader InterceptHttpStreamAsync uses internally, seeded with the request line
+        // already consumed by HandleClientAsync. Previously this method hand-rolled a
+        // headers-only read, wrote it straight to upstream, then handed off to
+        // InterceptHttpStreamAsync — whose loop unconditionally starts by reading a *new*
+        // request from the client. Since a plain-HTTP client sends exactly one request and
+        // then waits for the response, that second read blocked forever: every plain
+        // http:// request through the proxy hung until the client's own timeout.
+        var (reqLine, reqHeaders, reqBody, reqBodyBytes) =
+            await ReadHttpMessageAsync(clientStream, settings.MaxBodySizeKb, ct, requestLine);
+        if (reqLine is null) return;
 
+        var hostHeader = ExtractHeaderValue(reqHeaders, "Host");
         if (hostHeader is null) return;
         var host = hostHeader.Contains(':') ? hostHeader[..hostHeader.LastIndexOf(':')] : hostHeader;
         int.TryParse(hostHeader.Contains(':') ? hostHeader[(hostHeader.LastIndexOf(':') + 1)..] : "80", out var port);
         if (port == 0) port = 80;
 
-        var headerBlock = string.Join("\r\n", lines) + "\r\n";
-        var headerBytes = Encoding.UTF8.GetBytes(headerBlock);
-
         // Resilient connect to upstream — per-host pipeline.
         var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
         {
             await upstreamTcp.ConnectAsync(host, port, token);
             return upstreamTcp;
@@ -265,11 +264,10 @@ public class ExplicitProxyServer(
         using (upstreamTcp)
         {
             var upstreamStream = upstreamTcp.GetStream();
-            await upstreamStream.WriteAsync(headerBytes, ct);
 
-            // Relay remaining client bytes then response
             await InterceptHttpStreamAsync(clientStream, upstreamStream, host, port, "http",
-                string.Empty, string.Empty, clientIp, settings, scope, ct);
+                string.Empty, string.Empty, clientIp, settings, scope, ct,
+                initialRequest: (reqLine, reqHeaders, reqBody, reqBodyBytes));
         }
     }
 
@@ -281,7 +279,8 @@ public class ExplicitProxyServer(
         string tlsVersion, string tlsCipher,
         string clientIp, ProxySettings settings,
         IServiceScope scope,
-        CancellationToken ct)
+        CancellationToken ct,
+        (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null)
     {
         var isPassive = settings.Mode == Core.Enums.ProxyMode.Passive;
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
@@ -289,8 +288,19 @@ public class ExplicitProxyServer(
 
         while (!ct.IsCancellationRequested)
         {
-            // Read request from client
-            var (reqLine, reqHeaders, reqBody, reqBodyBytes) = await ReadHttpMessageAsync(clientStream, settings.MaxBodySizeKb, ct);
+            // Read request from client — except on the first iteration of the plain-HTTP
+            // path, where HandlePlainHttpAsync already read (and passed in) the one request
+            // a plain-HTTP client sends before waiting on the response.
+            string? reqLine; string reqHeaders; string reqBody; byte[] reqBodyBytes;
+            if (initialRequest is { } seed)
+            {
+                (reqLine, reqHeaders, reqBody, reqBodyBytes) = seed;
+                initialRequest = null;
+            }
+            else
+            {
+                (reqLine, reqHeaders, reqBody, reqBodyBytes) = await ReadHttpMessageAsync(clientStream, settings.MaxBodySizeKb, ct);
+            }
             if (reqLine is null) break;
 
             var started = DateTimeOffset.UtcNow;
@@ -305,7 +315,7 @@ public class ExplicitProxyServer(
                 await WriteHttpMessageAsync(upstreamStream, reqLine, reqHeaders, reqBodyBytes, ct);
 
                 var (statusLine, respHeaders, respBody, respBodyBytes) =
-                    await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct);
+                    await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
 
                 if (statusLine is not null)
                     await WriteHttpMessageAsync(clientStream, statusLine, respHeaders, respBodyBytes, ct);
@@ -317,11 +327,11 @@ public class ExplicitProxyServer(
                 {
                     Method = method, Scheme = scheme, Host = host, Port = port,
                     Path = path, Query = query, RequestHeaders = reqHeaders,
-                    RequestBody = settings.CaptureRequestBodies ? reqBody : string.Empty,
+                    RequestBody = settings.CaptureRequestBodies ? TruncateForStorage(reqBody, settings.MaxBodySizeKb) : string.Empty,
                     RequestBodySize = reqBodyBytes.Length,
                     StatusCode = sc, StatusMessage = sm,
                     ResponseHeaders = respHeaders ?? string.Empty,
-                    ResponseBody = settings.CaptureResponseBodies ? (respBody ?? string.Empty) : string.Empty,
+                    ResponseBody = settings.CaptureResponseBodies ? TruncateForStorage(respBody ?? string.Empty, settings.MaxBodySizeKb) : string.Empty,
                     ResponseBodySize = respBodyBytes?.Length ?? 0,
                     IsTls = scheme == "https", TlsVersion = tlsVersion, TlsCipherSuite = tlsCipher,
                     Protocol = scheme == "https" ? InterceptionProtocol.Https : InterceptionProtocol.Http,
@@ -373,7 +383,7 @@ public class ExplicitProxyServer(
                 await WriteHttpMessageAsync(upstreamStream, reqLine, reqHeaders, reqBodyBytes, ct);
 
             // Read response from upstream
-            var (statusLine2, respHeaders2, respBody2, respBodyBytes2) = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct);
+            var (statusLine2, respHeaders2, respBody2, respBodyBytes2) = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
 
             // Decode Content-Encoding for storage (the original compressed bytes are still
             // forwarded to the client below — we only change what gets persisted in the DB)
@@ -505,12 +515,12 @@ public class ExplicitProxyServer(
                 Path = path,
                 Query = query,
                 RequestHeaders = reqHeaders,
-                RequestBody = settings.CaptureRequestBodies ? reqBody : string.Empty,
+                RequestBody = settings.CaptureRequestBodies ? TruncateForStorage(reqBody, settings.MaxBodySizeKb) : string.Empty,
                 RequestBodySize = reqBodyBytes.Length,
                 StatusCode = statusCode,
                 StatusMessage = statusMsg,
                 ResponseHeaders = respHeaders2,
-                ResponseBody = settings.CaptureResponseBodies ? respBody2 : string.Empty,
+                ResponseBody = settings.CaptureResponseBodies ? TruncateForStorage(respBody2, settings.MaxBodySizeKb) : string.Empty,
                 ResponseBodySize = respBodyBytes2.Length,
                 IsTls = scheme == "https",
                 TlsVersion = tlsVersion,
@@ -771,7 +781,7 @@ public class ExplicitProxyServer(
 
         // Connect upstream — per-host pipeline.
         var upstream = new TcpClient();
-        await perHostPipelines.GetPipeline(sniHost).ExecuteAsync(async token =>
+        await perHostPipelines.GetPipeline(sniHost, port).ExecuteAsync(async token =>
         {
             await upstream.ConnectAsync(sniHost, port, token);
             return upstream;
@@ -965,10 +975,15 @@ public class ExplicitProxyServer(
         return await devices.UpsertByIpAsync(device, ct);
     }
 
+    // Hard ceiling on bytes read for a single message body, independent of the
+    // user-configurable MaxBodySizeKb (which only caps what gets persisted for review).
+    // Purely a memory-safety backstop against a pathological Content-Length.
+    private const int WireBodySafetyCeilingBytes = 200 * 1024 * 1024;
+
     private static async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> ReadHttpMessageAsync(
-        Stream stream, int maxBodyKb, CancellationToken ct)
+        Stream stream, int maxBodyKb, CancellationToken ct, string? knownFirstLine = null, bool isResponse = false)
     {
-        string? firstLine = null;
+        string? firstLine = knownFirstLine;
         var headerLines = new List<string>();
         int contentLength = 0;
         bool chunked = false;
@@ -991,32 +1006,64 @@ public class ExplicitProxyServer(
         byte[] bodyBytes = [];
         var body = string.Empty;
 
-        if (contentLength > 0)
+        // Per RFC 7230 §3.3.3 rule 1: a response with a 1xx, 204, or 304 status code is
+        // always terminated by the header block alone and can never have a body, no matter
+        // what Content-Length/Transfer-Encoding headers say. These respond over a
+        // keep-alive connection the server has no intention of closing, so treating them
+        // as close-delimited (or trusting a stray Content-Length) can hang forever waiting
+        // for bytes that will never arrive.
+        var noBody = isResponse && firstLine is not null && IsBodylessStatus(firstLine);
+
+        // maxBodyKb (a small, user-configurable "how much to persist for review" setting,
+        // 1024 KB by default) must NOT cap what's actually read off the wire — doing so
+        // silently truncated any response over the cap (JS bundles, images, etc.) before
+        // forwarding it to the client, corrupting it. WireBodySafetyCeilingBytes is a much
+        // larger hard ceiling purely to bound memory use against a pathological/malicious
+        // Content-Length; the DB-storage cap is applied separately, only to what gets
+        // persisted, at the call sites that build CapturedRequest.
+        if (noBody)
         {
-            var maxBytes = maxBodyKb * 1024;
-            var readLen = Math.Min(contentLength, maxBytes);
+            // No body to read — leave bodyBytes/body empty regardless of what the
+            // (possibly stray/incorrect) headers claim.
+        }
+        else if (contentLength > 0)
+        {
+            var readLen = Math.Min(contentLength, WireBodySafetyCeilingBytes);
             bodyBytes = new byte[readLen];
             await stream.ReadExactlyAsync(bodyBytes, ct);
             body = Encoding.UTF8.GetString(bodyBytes);
-            // Drain remainder if we truncated
-            if (contentLength > maxBytes)
+            // Drain remainder only in the pathological case that exceeds the safety ceiling
+            if (contentLength > WireBodySafetyCeilingBytes)
             {
-                var drain = new byte[contentLength - maxBytes];
+                var drain = new byte[contentLength - WireBodySafetyCeilingBytes];
                 await stream.ReadExactlyAsync(drain, ct);
             }
         }
         else if (chunked)
         {
-            (bodyBytes, body) = await ReadChunkedBodyAsync(stream, maxBodyKb * 1024, ct);
+            (bodyBytes, body) = await ReadChunkedBodyAsync(stream, WireBodySafetyCeilingBytes, ct);
+        }
+        var closeDelimited = false;
+        if (isResponse && !noBody && contentLength <= 0 && !chunked)
+        {
+            // Neither Content-Length nor chunked encoding: per RFC 7230 §3.3.3 this is only
+            // legal for a response, whose body is then delimited by the connection closing.
+            // Common for simple/embedded local HTTP(S) servers (IoT devices, HTTP/1.0-style
+            // servers). Read until EOF — the connection is done after this message either way.
+            (bodyBytes, body) = await ReadUntilCloseAsync(stream, WireBodySafetyCeilingBytes, ct);
+            closeDelimited = true;
         }
 
         // Normalize headers: replace Transfer-Encoding and Content-Length to match actual body bytes
-        if (chunked || (contentLength > 0 && bodyBytes.Length != contentLength))
+        if (chunked || closeDelimited || (contentLength > 0 && bodyBytes.Length != contentLength))
         {
             var fixedLines = headerLines
                 .Where(l => !l.StartsWith("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
-                         && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                         && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)
+                         && !(closeDelimited && l.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase)))
                 .ToList();
+            if (closeDelimited)
+                fixedLines.Add("Connection: close");
             if (bodyBytes.Length > 0)
                 fixedLines.Add($"Content-Length: {bodyBytes.Length}");
             headers = string.Join("\r\n", fixedLines);
@@ -1050,6 +1097,23 @@ public class ExplicitProxyServer(
             }
         }
         return (rawList.ToArray(), sb.ToString());
+    }
+
+    private static async Task<(byte[] bytes, string text)> ReadUntilCloseAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var rawList = new List<byte>();
+        var buf = new byte[8192];
+        int read;
+        while ((read = await stream.ReadAsync(buf, ct)) > 0)
+        {
+            if (rawList.Count < maxBytes)
+            {
+                var take = Math.Min(read, maxBytes - rawList.Count);
+                rawList.AddRange(buf.AsSpan(0, take));
+            }
+        }
+        var bytes = rawList.ToArray();
+        return (bytes, Encoding.UTF8.GetString(bytes));
     }
 
     private static async Task WriteHttpMessageAsync(
@@ -1136,6 +1200,21 @@ public class ExplicitProxyServer(
         return string.Join("\r\n", lines);
     }
 
+    // Caps only what gets persisted to the capture DB for review — never applied to bytes
+    // actually forwarded on the wire (see WireBodySafetyCeilingBytes).
+    private static string TruncateForStorage(string body, int maxBodyKb)
+    {
+        var maxChars = maxBodyKb * 1024;
+        return body.Length > maxChars ? body[..maxChars] : body;
+    }
+
+    private static bool IsBodylessStatus(string statusLine)
+    {
+        var parts = statusLine.Split(' ', 3);
+        if (parts.Length < 2 || !int.TryParse(parts[1], out var code)) return false;
+        return code is 204 or 304 || (code >= 100 && code < 200);
+    }
+
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
     {
         var bytes = new List<byte>(256);
@@ -1154,6 +1233,20 @@ public class ExplicitProxyServer(
         var parts = line.Split(' ');
         method = parts.Length > 0 ? parts[0] : "GET";
         var rawPath = parts.Length > 1 ? parts[1] : "/";
+
+        // Plain-HTTP proxy requests use absolute-form request targets
+        // (e.g. "GET http://host:port/path HTTP/1.1") per RFC 7230 §5.3.2, unlike
+        // CONNECT/TLS-MITM requests which see origin-form ("GET /path HTTP/1.1").
+        // Strip scheme+authority here so Path/Query are always origin-relative —
+        // otherwise consumers that build "{scheme}://{host}{path}" (capture display,
+        // curl export) end up with the host duplicated into the reconstructed URL.
+        if (rawPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            rawPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Uri.TryCreate(rawPath, UriKind.Absolute, out var absolute))
+                rawPath = absolute.PathAndQuery;
+        }
+
         var qi = rawPath.IndexOf('?');
         path = qi < 0 ? rawPath : rawPath[..qi];
         query = qi < 0 ? string.Empty : rawPath[(qi + 1)..];

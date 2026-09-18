@@ -48,6 +48,56 @@ public class DeviceRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task UpsertByIpAsync_RecentLastSeenNoMetadataChange_DoesNotRewriteLastSeen()
+    {
+        // Regression for the SQLite-single-writer proxy-fanout slowdown: a connection that
+        // changes nothing (same IP, no new hostname/vendor/MAC, seen moments ago) must not
+        // trigger a write at all.
+        var repo = new DeviceRepository(_db);
+        var inserted = await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.30" }, TestContext.Current.CancellationToken);
+        var originalLastSeen = inserted.LastSeen;
+
+        var result = await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.30" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(originalLastSeen, result.LastSeen);
+    }
+
+    [Fact]
+    public async Task UpsertByIpAsync_StaleLastSeen_UpdatesLastSeen()
+    {
+        var repo = new DeviceRepository(_db);
+        var inserted = await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.31" }, TestContext.Current.CancellationToken);
+
+        // Simulate the device having gone stale (older than the 30s write threshold).
+        inserted.LastSeen = DateTimeOffset.UtcNow.AddSeconds(-60);
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var result = await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.31" }, TestContext.Current.CancellationToken);
+
+        Assert.True(result.LastSeen > DateTimeOffset.UtcNow.AddSeconds(-5));
+    }
+
+    [Fact]
+    public async Task UpsertByIpAsync_MetadataChanged_UpdatesEvenWithFreshLastSeen()
+    {
+        // A hostname/vendor/MAC change is worth persisting immediately regardless of how
+        // recently LastSeen was written — only a true no-op connection should be skipped.
+        var repo = new DeviceRepository(_db);
+        await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.32" }, TestContext.Current.CancellationToken);
+
+        var result = await repo.UpsertByIpAsync(
+            new Device { IpAddress = "192.168.1.32", Hostname = "new-hostname.local" },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("new-hostname.local", result.Hostname);
+    }
+
+    [Fact]
     public async Task GetByIdAsync_WhenFound_ReturnsDevice()
     {
         var repo = new DeviceRepository(_db);

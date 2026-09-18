@@ -6,6 +6,18 @@ namespace IoTSpy.Storage.Repositories;
 
 public class DeviceRepository(IoTSpyDbContext db) : IDeviceRepository
 {
+    // UpsertByIpAsync runs on every single proxied connection (ExplicitProxyServer,
+    // TransparentProxyServer, CoapProxy all call it once per connection, not once per
+    // device). SQLite allows only one writer at a time for the whole database file, so
+    // unconditionally writing LastSeen on every call serializes every connection from a
+    // single client behind that write lock — a page that fans out to many hosts at once
+    // (e.g. a video site loading dozens of CDN/ad/font hosts in parallel) collapses to
+    // one connection completing at a time instead of running concurrently. LastSeen is
+    // only ever shown as a coarse "when was this device last active" timestamp (never a
+    // live/real-time indicator), so it doesn't need per-connection precision — only
+    // write it when it's actually gone stale.
+    private static readonly TimeSpan LastSeenWriteThreshold = TimeSpan.FromSeconds(30);
+
     public Task<List<Device>> GetAllAsync(CancellationToken ct = default) =>
         db.Devices.OrderByDescending(d => d.LastSeen).ToListAsync(ct);
 
@@ -25,7 +37,19 @@ public class DeviceRepository(IoTSpyDbContext db) : IDeviceRepository
             return device;
         }
 
-        existing.LastSeen = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UtcNow;
+        var hasMetadataChange =
+            (!string.IsNullOrEmpty(device.Hostname) && existing.Hostname != device.Hostname) ||
+            (!string.IsNullOrEmpty(device.Vendor) && existing.Vendor != device.Vendor) ||
+            (!string.IsNullOrEmpty(device.MacAddress) && existing.MacAddress != device.MacAddress);
+        var lastSeenIsStale = now - existing.LastSeen >= LastSeenWriteThreshold;
+
+        // Nothing worth persisting for this connection — skip the write entirely rather
+        // than round-tripping a no-op UPDATE through SQLite's single-writer lock.
+        if (!hasMetadataChange && !lastSeenIsStale)
+            return existing;
+
+        existing.LastSeen = now;
         if (!string.IsNullOrEmpty(device.Hostname) && existing.Hostname != device.Hostname)
             existing.Hostname = device.Hostname;
         if (!string.IsNullOrEmpty(device.Vendor) && existing.Vendor != device.Vendor)

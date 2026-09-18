@@ -33,6 +33,14 @@ using Scalar.AspNetCore;
 using Serilog;
 using StackExchange.Redis;
 
+// Raise the CLR thread-pool floor before the host starts accepting connections. Under
+// concurrent proxy load (many simultaneous devices/hosts), the default pool's hill-climbing
+// growth injects new worker threads at roughly one per ~0.5-1s once saturated — verified via
+// a synthetic multi-device stress test to serialize TLS handshake completion into a strict
+// one-at-a-time queue (11-30s for 36 concurrent connections) even though every handshake was
+// otherwise independent. Setting the floor eliminates that queuing outright.
+System.Threading.ThreadPool.SetMinThreads(200, 200);
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Serilog (Phase 8.2) ───────────────────────────────────────────────────────
