@@ -20,6 +20,7 @@ public class DataRetentionServiceTests
         services.AddDbContext<IoTSpyDbContext>(opts =>
             opts.UseSqlite($"Data Source=file:{dbName}?mode=memory&cache=shared"));
         services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IHostBaselineRepository, HostBaselineRepository>();
         var provider = services.BuildServiceProvider();
 
         var db = provider.GetRequiredService<IoTSpyDbContext>();
@@ -187,6 +188,51 @@ public class DataRetentionServiceTests
     }
 
     [Fact]
+    public async Task RunRetentionPass_DeletesStaleHostBaselines()
+    {
+        var (db, scopeFactory) = CreateDb();
+        var opts = new DataRetentionOptions
+        {
+            Enabled = true,
+            CaptureRetentionDays = 0,
+            PacketRetentionDays = 0,
+            ScanJobRetentionDays = 0,
+            OpenRtbEventRetentionDays = 0,
+            ProtocolMessageRetentionDays = 0,
+            HostBaselineRetentionDays = 30,
+            RunIntervalHours = 1
+        };
+
+        db.HostBaselines.Add(new HostBaselineRecord
+        {
+            Host = "stale.example.com",
+            SampleCount = 10,
+            FirstSeenAt = DateTimeOffset.UtcNow.AddDays(-60),
+            StatusCodeCountsJson = "{}",
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-40),
+        });
+        db.HostBaselines.Add(new HostBaselineRecord
+        {
+            Host = "active.example.com",
+            SampleCount = 500,
+            FirstSeenAt = DateTimeOffset.UtcNow.AddDays(-60),
+            StatusCodeCountsJson = "{}",
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1), // still refreshed recently
+        });
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var svc = CreateService(scopeFactory, opts);
+        var method = typeof(DataRetentionService)
+            .GetMethod("RunRetentionPassAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)method.Invoke(svc, [opts, TestContext.Current.CancellationToken])!;
+
+        var remaining = await db.HostBaselines.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Single(remaining);
+        Assert.Equal("active.example.com", remaining[0].Host);
+    }
+
+    [Fact]
     public void DataRetentionOptions_Defaults_AreReasonable()
     {
         var opts = new DataRetentionOptions();
@@ -195,6 +241,7 @@ public class DataRetentionServiceTests
         Assert.Equal(7, opts.PacketRetentionDays);
         Assert.Equal(90, opts.ScanJobRetentionDays);
         Assert.Equal(14, opts.OpenRtbEventRetentionDays);
+        Assert.Equal(30, opts.HostBaselineRetentionDays);
         Assert.Equal(24, opts.RunIntervalHours);
     }
 }

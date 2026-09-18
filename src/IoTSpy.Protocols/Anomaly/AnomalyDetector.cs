@@ -47,9 +47,9 @@ public sealed class AnomalyDetector : IAnomalyDetector
         long responseSizeBytes,
         int statusCode)
     {
-        var baseline = _baselines.GetOrAdd(host, h => new HostBaseline { Host = h });
-        var alerts = new List<AnomalyAlert>();
         var now = DateTimeOffset.UtcNow;
+        var baseline = _baselines.GetOrAdd(host, h => new HostBaseline { Host = h, FirstSeenAt = now });
+        var alerts = new List<AnomalyAlert>();
 
         lock (baseline)
         {
@@ -145,14 +145,19 @@ public sealed class AnomalyDetector : IAnomalyDetector
 
             // ── Request rate anomaly ─────────────────────────────────────────
             // Compare current window rate against historical average rate.
-            // Historical average = total samples / elapsed seconds since first observation.
+            // Historical average = total samples / elapsed seconds since the host was
+            // first observed (baseline.FirstSeenAt), NOT bounded by RateWindowSeconds —
+            // the previous formula's denominator was effectively capped near
+            // RateWindowSeconds regardless of SampleCount, which meant historicalRate grew
+            // roughly proportionally with SampleCount forever, making the RequestRate alert
+            // impossible to trigger for hosts with a large sample count (in particular,
+            // restoring a persisted baseline with a large SampleCount would permanently
+            // disable this alert type for that host).
             var windowCount = baseline.RequestTimestamps.Count;
             var currentRate = windowCount / (double)RateWindowSeconds;   // requests / second
 
-            // Historical rate proxy: mean samples per window
-            var historicalRate = baseline.SampleCount / (double)Math.Max(
-                1, (now - (baseline.RequestTimestamps.TryPeek(out var first) ? first : now)).TotalSeconds
-                   + RateWindowSeconds);
+            var elapsedSeconds = Math.Max(1.0, (now - baseline.FirstSeenAt).TotalSeconds);
+            var historicalRate = baseline.SampleCount / elapsedSeconds;
 
             if (historicalRate > 0 && currentRate > historicalRate * (1 + DeviationThreshold))
             {
@@ -177,4 +182,76 @@ public sealed class AnomalyDetector : IAnomalyDetector
 
     /// <inheritdoc/>
     public void Reset(string host) => _baselines.TryRemove(host, out _);
+
+    /// <inheritdoc/>
+    public IReadOnlyList<HostBaselineSnapshot> SnapshotBaselines()
+    {
+        var result = new List<HostBaselineSnapshot>(_baselines.Count);
+
+        foreach (var kvp in _baselines)
+        {
+            var baseline = kvp.Value;
+
+            // Take the SAME per-host lock Record() uses before touching mutable state.
+            // This is the only safe way to read StatusCodeCounts/scalars concurrently —
+            // GetBaselines() intentionally does not do this, by design, for existing callers.
+            lock (baseline)
+            {
+                result.Add(new HostBaselineSnapshot
+                {
+                    Host = baseline.Host,
+                    SampleCount = baseline.SampleCount,
+                    FirstSeenAt = baseline.FirstSeenAt,
+                    DurationMean = baseline.DurationMean,
+                    DurationM2 = baseline.DurationM2,
+                    SizeMean = baseline.SizeMean,
+                    SizeM2 = baseline.SizeM2,
+                    StatusCodeCounts = new Dictionary<int, long>(baseline.StatusCodeCounts),
+                });
+            }
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc/>
+    public void Seed(IEnumerable<HostBaselineRecord> records)
+    {
+        foreach (var record in records)
+        {
+            var baseline = new HostBaseline
+            {
+                Host = record.Host,
+                SampleCount = record.SampleCount,
+                FirstSeenAt = record.FirstSeenAt,
+                DurationMean = record.DurationMean,
+                DurationM2 = record.DurationM2,
+                SizeMean = record.SizeMean,
+                SizeM2 = record.SizeM2,
+            };
+
+            Dictionary<int, long>? histogram = null;
+            try
+            {
+                histogram = System.Text.Json.JsonSerializer.Deserialize<Dictionary<int, long>>(
+                    record.StatusCodeCountsJson);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // Malformed persisted JSON — fall back to an empty histogram rather than
+                // failing startup recovery for every other host.
+            }
+
+            if (histogram is not null)
+            {
+                foreach (var (statusCode, count) in histogram)
+                    baseline.StatusCodeCounts[statusCode] = count;
+            }
+
+            // Bypasses Record()'s warm-up-gate path entirely: we're writing directly into
+            // the dictionary, not going through Record(), so a restored host's SampleCount
+            // is immediately eligible for alerts without needing to re-earn WarmUpSamples.
+            _baselines[record.Host] = baseline;
+        }
+    }
 }

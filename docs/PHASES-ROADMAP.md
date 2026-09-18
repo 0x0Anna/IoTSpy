@@ -13,7 +13,7 @@ See [PHASES-COMPLETED.md](PHASES-COMPLETED.md) for all completed work including 
 ### Scanner & Anomaly
 - **Scan findings correlation** — Group findings by vulnerability class, CVE, affected service; currently raw list only
 - **Custom anomaly rules** — Declarative anomaly rules (similar to the manipulation rules engine) to flag specific traffic patterns; replaces purely statistical Welford baseline
-- **Behavioral fingerprinting** — Persistent per-device baseline across proxy restarts; detect changes in device communication patterns over time
+- **Behavioral fingerprinting** — Host-level Welford baselines (duration/size/status-code) now persist across restarts (`HostBaselineCheckpointService` + `HostBaselines` table — see `docs/GAPS.md` Design Assumptions #5). Still open: device-level (rather than host-level) keying, and detecting *changes* in device communication patterns over time (pattern-drift analysis over the persisted history) — this PR only persists and restores the existing point-in-time statistical baseline, it doesn't analyze how that baseline drifts
 - **Behavioral inference / privacy-leakage module** — Infer occupant activity/routines from packet metadata alone (below TLS); see [PLAN-BEHAVIORAL-INFERENCE.md](PLAN-BEHAVIORAL-INFERENCE.md) for the full design
 
 ### Protocol Decoder Depth

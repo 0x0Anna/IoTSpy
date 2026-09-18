@@ -54,6 +54,7 @@ public class DataRetentionService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IoTSpyDbContext>();
         var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditRepository>();
+        var hostBaselineRepo = scope.ServiceProvider.GetRequiredService<IHostBaselineRepository>();
 
         var now = DateTimeOffset.UtcNow;
         var totalDeleted = 0;
@@ -122,6 +123,15 @@ public class DataRetentionService(
                 logger.LogInformation("Archived {Count} audit entries older than {Cutoff}", archived, cutoff);
         }
 
+        if (opts.HostBaselineRetentionDays > 0)
+        {
+            var cutoff = now.AddDays(-opts.HostBaselineRetentionDays);
+            var deleted = await hostBaselineRepo.DeleteOlderThanAsync(cutoff, ct);
+            totalDeleted += deleted;
+            if (deleted > 0)
+                logger.LogInformation("Deleted {Count} stale host baselines older than {Cutoff}", deleted, cutoff);
+        }
+
         if (opts.AuditArchivePurgeDays > 0)
         {
             var cutoff = now.AddDays(-opts.AuditArchivePurgeDays);
@@ -163,6 +173,14 @@ public class DataRetentionOptions
 
     /// <summary>Delete persisted protocol messages (MQTT/DNS) older than this many days. 0 = never.</summary>
     public int ProtocolMessageRetentionDays { get; set; } = 14;
+
+    /// <summary>
+    /// Delete persisted anomaly-detector host baselines whose UpdatedAt is older than this
+    /// many days. 0 = never. A host that keeps receiving traffic keeps refreshing UpdatedAt
+    /// on every checkpoint flush, so this only cleans up genuinely stale/abandoned hosts
+    /// (including SNI-based junk from probing).
+    /// </summary>
+    public int HostBaselineRetentionDays { get; set; } = 30;
 
     /// <summary>Move audit entries older than this many days to AuditArchive. 0 = never archive.</summary>
     public int AuditRetentionDays { get; set; } = 0;

@@ -196,6 +196,8 @@ builder.Services.AddSingleton<ICoapProxy, CoapProxy>();
 builder.Services.AddSingleton<IAnomalyDetector, AnomalyDetector>();
 builder.Services.AddSingleton<MqttSessionAnalyzer>();
 builder.Services.AddSingleton<WebSocketMessageReassembler>();
+// Nothing else resolves this directly — a plain AddHostedService<T> is sufficient.
+builder.Services.AddHostedService<HostBaselineCheckpointService>();
 
 // ── Scanner ─────────────────────────────────────────────────────────────────
 builder.Services.AddIoTSpyScanner(builder.Configuration);

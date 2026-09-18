@@ -82,6 +82,9 @@ services.AddScoped<IOpenRtbEventRepository, OpenRtbEventRepository>();
         // ML analytics — traffic insights
         services.AddScoped<ITrafficInsightRepository, TrafficInsightRepository>();
 
+        // Anomaly detector baseline persistence
+        services.AddScoped<IHostBaselineRepository, HostBaselineRepository>();
+
         return services;
     }
 

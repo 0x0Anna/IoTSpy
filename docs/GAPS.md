@@ -77,7 +77,7 @@ These assumptions should be revisited if requirements change:
 2. **SQLite for development, Postgres for production** — Current schema and migrations support both, but testing is primary on SQLite.
 3. **Browser-based dashboard** — Assumes web client; no native mobile apps or CLI tools planned.
 4. **JWT + API key auth only** — No SAML/LDAP support (Phase 16.5 deprioritized; see Active Gaps).
-5. **In-memory anomaly detector** — Resets on restart; no persistent baseline learning.
+5. ~~**In-memory anomaly detector** — Resets on restart; no persistent baseline learning.~~ **Resolved.** `AnomalyDetector`'s per-host Welford baseline (duration/size means+variance, status-code histogram) is now checkpointed to the `HostBaselines` table every 30s and on graceful shutdown (`HostBaselineCheckpointService`), and restored at startup via `IAnomalyDetector.Seed(...)` — a restored host does not need to re-earn its warm-up sample count. This is host-keyed, not device-keyed, and does not add pattern-drift detection over the persisted history — see `PHASES-ROADMAP.md`'s narrowed "Behavioral fingerprinting" line for what's still open.
 6. **Request-scoped repositories** — Each HTTP request gets a fresh EF Core DbContext; not suitable for long-running background tasks without scope management.
 
 ---

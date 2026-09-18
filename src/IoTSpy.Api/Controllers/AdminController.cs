@@ -490,6 +490,7 @@ public class AdminController(
             scanJobRetentionDays = opts.ScanJobRetentionDays,
             openRtbEventRetentionDays = opts.OpenRtbEventRetentionDays,
             protocolMessageRetentionDays = opts.ProtocolMessageRetentionDays,
+            hostBaselineRetentionDays = opts.HostBaselineRetentionDays,
             auditRetentionDays = opts.AuditRetentionDays,
             auditArchivePurgeDays = opts.AuditArchivePurgeDays,
             runIntervalHours = opts.RunIntervalHours,
@@ -505,7 +506,8 @@ public class AdminController(
         int AuditRetentionDays,
         int AuditArchivePurgeDays,
         double RunIntervalHours,
-        int ProtocolMessageRetentionDays = 14);
+        int ProtocolMessageRetentionDays = 14,
+        int HostBaselineRetentionDays = 30);
 
     [HttpPut("retention")]
     public async Task<IActionResult> UpdateRetentionSettings(
@@ -516,7 +518,7 @@ public class AdminController(
         if (request.CaptureRetentionDays < 0 || request.PacketRetentionDays < 0 ||
             request.ScanJobRetentionDays < 0 || request.OpenRtbEventRetentionDays < 0 ||
             request.AuditRetentionDays < 0 || request.AuditArchivePurgeDays < 0 ||
-            request.ProtocolMessageRetentionDays < 0)
+            request.ProtocolMessageRetentionDays < 0 || request.HostBaselineRetentionDays < 0)
             return BadRequest(new { error = "Retention days must be >= 0 (0 = never purge)" });
 
         var opts = new DataRetentionOptions
@@ -527,6 +529,7 @@ public class AdminController(
             ScanJobRetentionDays = request.ScanJobRetentionDays,
             OpenRtbEventRetentionDays = request.OpenRtbEventRetentionDays,
             ProtocolMessageRetentionDays = request.ProtocolMessageRetentionDays,
+            HostBaselineRetentionDays = request.HostBaselineRetentionDays,
             AuditRetentionDays = request.AuditRetentionDays,
             AuditArchivePurgeDays = request.AuditArchivePurgeDays,
             RunIntervalHours = request.RunIntervalHours,
@@ -538,7 +541,7 @@ public class AdminController(
             Username = User.Identity?.Name ?? "system",
             Action = "UpdateRetentionSettings",
             EntityType = "DataRetentionOptions",
-            Details = $"Enabled={opts.Enabled}, CaptureDays={opts.CaptureRetentionDays}, PacketDays={opts.PacketRetentionDays}, ScanDays={opts.ScanJobRetentionDays}, OpenRtbDays={opts.OpenRtbEventRetentionDays}, ProtocolMessageDays={opts.ProtocolMessageRetentionDays}, AuditDays={opts.AuditRetentionDays}, AuditPurgeDays={opts.AuditArchivePurgeDays}, IntervalHours={opts.RunIntervalHours}",
+            Details = $"Enabled={opts.Enabled}, CaptureDays={opts.CaptureRetentionDays}, PacketDays={opts.PacketRetentionDays}, ScanDays={opts.ScanJobRetentionDays}, OpenRtbDays={opts.OpenRtbEventRetentionDays}, ProtocolMessageDays={opts.ProtocolMessageRetentionDays}, HostBaselineDays={opts.HostBaselineRetentionDays}, AuditDays={opts.AuditRetentionDays}, AuditPurgeDays={opts.AuditArchivePurgeDays}, IntervalHours={opts.RunIntervalHours}",
             IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? ""
         }, ct);
 

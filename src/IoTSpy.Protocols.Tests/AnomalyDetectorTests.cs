@@ -1,4 +1,5 @@
 using Xunit;
+using IoTSpy.Core.Models;
 using IoTSpy.Protocols.Anomaly;
 
 namespace IoTSpy.Protocols.Tests;
@@ -262,5 +263,210 @@ public class AnomalyDetectorTests
         // Anomaly on fast-host should not affect slow-host
         var alerts = detector.Record("fast-host", 50000, 512, 200);
         Assert.Contains(alerts, a => a.Host == "fast-host" && a.AlertType == "ResponseTime");
+    }
+
+    // ── SnapshotBaselines ────────────────────────────────────────────────────
+
+    [Fact]
+    public void SnapshotBaselines_ReturnsDefensiveCopyOfStatusCodeHistogram()
+    {
+        var detector = new AnomalyDetector { WarmUpSamples = 5 };
+        detector.Record("h", 100, 1024, 200);
+        detector.Record("h", 100, 1024, 200);
+        detector.Record("h", 100, 1024, 404);
+
+        var snapshot = detector.SnapshotBaselines().Single(s => s.Host == "h");
+
+        Assert.Equal(3, snapshot.SampleCount);
+        Assert.Equal(2, snapshot.StatusCodeCounts[200]);
+        Assert.Equal(1, snapshot.StatusCodeCounts[404]);
+
+        // Mutating the snapshot's dictionary must not affect the live baseline.
+        var mutable = (Dictionary<int, long>)snapshot.StatusCodeCounts;
+        mutable[999] = 42;
+        var secondSnapshot = detector.SnapshotBaselines().Single(s => s.Host == "h");
+        Assert.False(secondSnapshot.StatusCodeCounts.ContainsKey(999));
+    }
+
+    [Fact]
+    public void SnapshotBaselines_ExcludesEmptyDetector()
+    {
+        var detector = new AnomalyDetector();
+        Assert.Empty(detector.SnapshotBaselines());
+    }
+
+    [Fact]
+    public async Task SnapshotBaselines_ConcurrentWithRecord_DoesNotThrowOrCorrupt()
+    {
+        var detector = new AnomalyDetector { WarmUpSamples = 5 };
+        // Seed a few hosts so there's something to snapshot from the start.
+        for (var i = 0; i < 5; i++)
+        {
+            detector.Record("host-a", 100, 1024, 200);
+            detector.Record("host-b", 100, 1024, 200);
+        }
+
+        using var cts = new CancellationTokenSource();
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        var writer = Task.Run(() =>
+        {
+            try
+            {
+                for (var i = 0; i < 5000 && !cts.IsCancellationRequested; i++)
+                {
+                    detector.Record("host-a", 100 + i % 7, 1024 + i % 13, 200 + (i % 3 == 0 ? 4 : 0));
+                    detector.Record("host-b", 50, 512, 200);
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        }, TestContext.Current.CancellationToken);
+
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            try
+            {
+                for (var i = 0; i < 2000 && !cts.IsCancellationRequested; i++)
+                {
+                    var snapshots = detector.SnapshotBaselines();
+                    foreach (var s in snapshots)
+                    {
+                        // Force full enumeration of the defensive copy — this must never
+                        // throw InvalidOperationException from concurrent mutation.
+                        long total = 0;
+                        foreach (var kv in s.StatusCodeCounts) total += kv.Value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        })).ToArray();
+
+        await writer;
+        cts.Cancel();
+        await Task.WhenAll(readers);
+
+        Assert.Empty(exceptions);
+    }
+
+    // ── Seed (restore from persisted checkpoint) ──────────────────────────────
+
+    [Fact]
+    public void Seed_RestoresBaselineState()
+    {
+        var detector = new AnomalyDetector { WarmUpSamples = 30 };
+        var firstSeen = DateTimeOffset.UtcNow.AddDays(-1);
+
+        detector.Seed([
+            new HostBaselineRecord
+            {
+                Host = "restored-host",
+                SampleCount = 500,
+                FirstSeenAt = firstSeen,
+                DurationMean = 42.0,
+                DurationM2 = 10.0,
+                SizeMean = 2048.0,
+                SizeM2 = 100.0,
+                StatusCodeCountsJson = "{\"200\":450,\"500\":50}",
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }
+        ]);
+
+        var baseline = detector.GetBaselines()["restored-host"];
+        Assert.Equal(500, baseline.SampleCount);
+        Assert.Equal(firstSeen, baseline.FirstSeenAt);
+        Assert.Equal(42.0, baseline.DurationMean);
+        Assert.Equal(450, baseline.StatusCodeCounts[200]);
+        Assert.Equal(50, baseline.StatusCodeCounts[500]);
+    }
+
+    [Fact]
+    public void Seed_HighSampleCount_SkipsWarmUpGate_AlertsFireImmediately()
+    {
+        // WarmUpSamples is keyed on SampleCount — seeding a high SampleCount should mean
+        // the very next Record() call is already past warm-up, unlike a cold host which
+        // would need WarmUpSamples observations first.
+        var detector = new AnomalyDetector { WarmUpSamples = 1000, DeviationThreshold = 0.5 };
+
+        detector.Seed([
+            new HostBaselineRecord
+            {
+                Host = "warm-host",
+                SampleCount = 2000,
+                FirstSeenAt = DateTimeOffset.UtcNow.AddDays(-1),
+                DurationMean = 100.0,
+                DurationM2 = 10.0, // small variance -> tight std dev
+                SizeMean = 1024.0,
+                SizeM2 = 10.0,
+                StatusCodeCountsJson = "{\"200\":2000}",
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }
+        ]);
+
+        // A single observation is enough to fire an alert — no re-warm-up needed.
+        var alerts = detector.Record("warm-host", 99999, 1024, 200);
+        Assert.Contains(alerts, a => a.AlertType == "ResponseTime");
+    }
+
+    [Fact]
+    public void Seed_MalformedHistogramJson_DoesNotThrow_FallsBackToEmpty()
+    {
+        var detector = new AnomalyDetector();
+        var ex = Xunit.Record.Exception(() => detector.Seed([
+            new HostBaselineRecord
+            {
+                Host = "bad-json-host",
+                SampleCount = 10,
+                FirstSeenAt = DateTimeOffset.UtcNow,
+                StatusCodeCountsJson = "not-json",
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }
+        ]));
+
+        Assert.Null(ex);
+        Assert.Empty(detector.GetBaselines()["bad-json-host"].StatusCodeCounts);
+    }
+
+    // ── Rate-alert-after-restore regression (FirstSeenAt fix) ─────────────────
+
+    [Fact]
+    public void Record_RateBurst_AfterSeedingLargeSampleCount_StillFiresRequestRateAlert()
+    {
+        // Regression test: before the FirstSeenAt fix, the historical-rate denominator was
+        // bounded near RateWindowSeconds regardless of SampleCount, so seeding a large
+        // persisted SampleCount made historicalRate scale unboundedly with SampleCount,
+        // permanently preventing the RequestRate alert from firing for that host.
+        var detector = new AnomalyDetector { WarmUpSamples = 30, DeviationThreshold = 3.0, RateWindowSeconds = 60 };
+
+        // Simulate a host that has been running (and persisted) for a long time with a
+        // low, steady request rate: many samples, but spread over a long FirstSeenAt.
+        detector.Seed([
+            new HostBaselineRecord
+            {
+                Host = "rate-host",
+                SampleCount = 100_000,
+                FirstSeenAt = DateTimeOffset.UtcNow.AddDays(-30), // long history, low average rate
+                DurationMean = 50.0,
+                DurationM2 = 5.0,
+                SizeMean = 1024.0,
+                SizeM2 = 5.0,
+                StatusCodeCountsJson = "{\"200\":100000}",
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }
+        ]);
+
+        // Historical rate ≈ 100000 / (30*86400) ≈ 0.0386 req/s.
+        // A burst of many requests in a tight loop should push the windowed rate well above
+        // (1 + threshold) * historicalRate and fire a RequestRate alert.
+        var allAlerts = new List<AnomalyAlert>();
+        for (var i = 0; i < 50; i++)
+            allAlerts.AddRange(detector.Record("rate-host", 50, 1024, 200));
+
+        Assert.Contains(allAlerts, a => a.AlertType == "RequestRate");
     }
 }
