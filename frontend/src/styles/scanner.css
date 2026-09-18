@@ -413,10 +413,54 @@
 
 .scan-finding-card__port,
 .scan-finding-card__service,
-.scan-finding-card__cve,
-.scan-finding-card__evidence,
-.scan-finding-card__remediation {
+.scan-finding-card__cve {
   font-size: 12px;
   color: var(--color-text-secondary);
   font-family: var(--font-mono);
+}
+
+.scan-finding-card__cvss {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-error-bg, var(--color-border));
+  color: var(--color-error);
+  font-family: var(--font-mono);
+}
+
+.scan-findings__groupby {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.scan-findings__groupby-btn {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.scan-findings__groupby-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.scan-findings__groupby-btn--active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast, #fff);
+}
+
+.scan-findings__group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
 }

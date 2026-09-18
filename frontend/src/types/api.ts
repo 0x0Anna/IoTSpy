@@ -329,7 +329,7 @@ export type ScanFindingType =
   | 'OpenPort'
   | 'ServiceBanner'
   | 'DefaultCredential'
-  | 'KnownCve'
+  | 'Cve'
   | 'ConfigIssue'
 
 // ── Scanner models ───────────────────────────────────────────────────────────
@@ -361,16 +361,27 @@ export interface ScanFinding {
   scanJobId: string
   type: ScanFindingType
   severity: ScanFindingSeverity
-  port: number
-  protocol: string
-  service: string
   title: string
   description: string
-  evidence: string
-  remediation: string
+
+  // Port scan / service info
+  port?: number
+  protocol?: string
+  serviceName?: string
+  banner?: string
+  cpe?: string
+
+  // Credential test
+  username?: string
+  password?: string
+
+  // CVE info
   cveId?: string
-  cpeString?: string
-  createdAt: string
+  cvssScore?: number
+  cveDescription?: string
+  reference?: string
+
+  foundAt: string
 }
 
 // ── Scanner request DTOs ─────────────────────────────────────────────────────
