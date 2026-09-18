@@ -223,9 +223,31 @@ public class ExplicitProxyServer(
                 }, token);
             }, ct);
 
+            // See the plain-HTTP reconnect note above — same stale-keep-alive gap applies
+            // to the MITM'd upstream TLS connection.
+            async Task<Stream> ReconnectAsync(CancellationToken token)
+            {
+                var freshTcp = new TcpClient();
+                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
+                {
+                    await freshTcp.ConnectAsync(host, port, t);
+                    return freshTcp;
+                }, token);
+                var freshSsl = new SslStream(freshTcp.GetStream());
+                await connectPipelineProvider.GetPipeline(ProxyResiliencePipelines.TlsPipelineKey).ExecuteAsync(async t =>
+                {
+                    await freshSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                    {
+                        TargetHost = host,
+                        RemoteCertificateValidationCallback = (_, _, _, _) => true
+                    }, t);
+                }, token);
+                return freshSsl;
+            }
+
             await InterceptHttpStreamAsync(sslClient, sslUpstream, host, port, "https",
                 sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
-                clientIp, settings, scope, ct);
+                clientIp, settings, scope, ct, reconnectUpstream: ReconnectAsync);
         }
     }
 
@@ -265,9 +287,26 @@ public class ExplicitProxyServer(
         {
             var upstreamStream = upstreamTcp.GetStream();
 
+            // Upstream servers often close idle keep-alive connections well before the
+            // client does (e.g. Vite's default 5s Keep-Alive timeout) — InterceptHttpStreamAsync
+            // reuses this one connection for every request the client sends, so a request
+            // arriving after the upstream has already closed needs a fresh connection rather
+            // than silently getting a zero-byte response.
+            async Task<Stream> ReconnectAsync(CancellationToken token)
+            {
+                var freshTcp = new TcpClient();
+                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
+                {
+                    await freshTcp.ConnectAsync(host, port, t);
+                    return freshTcp;
+                }, token);
+                return freshTcp.GetStream();
+            }
+
             await InterceptHttpStreamAsync(clientStream, upstreamStream, host, port, "http",
                 string.Empty, string.Empty, clientIp, settings, scope, ct,
-                initialRequest: (reqLine, reqHeaders, reqBody, reqBodyBytes));
+                initialRequest: (reqLine, reqHeaders, reqBody, reqBodyBytes),
+                reconnectUpstream: ReconnectAsync);
         }
     }
 
@@ -280,12 +319,40 @@ public class ExplicitProxyServer(
         string clientIp, ProxySettings settings,
         IServiceScope scope,
         CancellationToken ct,
-        (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null)
+        (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null,
+        Func<CancellationToken, Task<Stream>>? reconnectUpstream = null)
     {
         var isPassive = settings.Mode == Core.Enums.ProxyMode.Passive;
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = isPassive ? null : scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+        var reconnectedStreams = new List<Stream>();
 
+        // Upstream keep-alive connections routinely get reused across many requests over
+        // this method's lifetime (one per client TCP connection). If the upstream server
+        // already closed its end (its own, often shorter, keep-alive timeout elapsed) our
+        // next write can still succeed locally while the read comes back immediately empty
+        // — reconnecting once and replaying the exact same request recovers transparently
+        // instead of returning a blank response to the client.
+        async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> WriteAndReadWithRetryAsync(
+            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
+        {
+            await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+            var result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+            if (result.firstLine is null && reconnectUpstream is not null)
+            {
+                logger.LogInformation(
+                    "Stale upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
+                    host, port, wReqLine);
+                upstreamStream = await reconnectUpstream(ct);
+                reconnectedStreams.Add(upstreamStream);
+                await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+                result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+            }
+            return result;
+        }
+
+        try
+        {
         while (!ct.IsCancellationRequested)
         {
             // Read request from client — except on the first iteration of the plain-HTTP
@@ -312,10 +379,8 @@ public class ExplicitProxyServer(
             if (isPassive)
             {
                 // Passive fast-path: forward traffic unchanged, no manipulation, no DB inserts
-                await WriteHttpMessageAsync(upstreamStream, reqLine, reqHeaders, reqBodyBytes, ct);
-
                 var (statusLine, respHeaders, respBody, respBodyBytes) =
-                    await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+                    await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
                 if (statusLine is not null)
                     await WriteHttpMessageAsync(clientStream, statusLine, respHeaders, respBodyBytes, ct);
@@ -378,12 +443,10 @@ public class ExplicitProxyServer(
                 reqHeaders = UpdateContentLength(reqHeaders, reqBodyBytes.Length);
             }
 
-            // Forward to upstream (skip if Drop action cleared the request line)
+            // Forward to upstream and read the response (skip if Drop action cleared the request line)
+            string? statusLine2 = null; string respHeaders2 = string.Empty; string respBody2 = string.Empty; byte[] respBodyBytes2 = [];
             if (!string.IsNullOrEmpty(reqLine))
-                await WriteHttpMessageAsync(upstreamStream, reqLine, reqHeaders, reqBodyBytes, ct);
-
-            // Read response from upstream
-            var (statusLine2, respHeaders2, respBody2, respBodyBytes2) = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+                (statusLine2, respHeaders2, respBody2, respBodyBytes2) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
             // Decode Content-Encoding for storage (the original compressed bytes are still
             // forwarded to the client below — we only change what gets persisted in the DB)
@@ -574,6 +637,12 @@ public class ExplicitProxyServer(
             if (respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
+        }
+        }
+        finally
+        {
+            foreach (var s in reconnectedStreams)
+                s.Dispose();
         }
     }
 
