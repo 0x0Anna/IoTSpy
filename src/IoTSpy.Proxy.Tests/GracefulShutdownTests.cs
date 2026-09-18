@@ -62,8 +62,8 @@ public class GracefulShutdownTests
             Substitute.For<IAnomalyAlertPublisher>(),
             new SslStripService(NullLogger<SslStripService>.Instance),
             Substitute.For<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-            Substitute.For<Polly.Registry.ResiliencePipelineProvider<string>>(),
             Substitute.For<IPerHostConnectPipelineCache>(),
+            Substitute.For<IUpstreamConnectionPool>(),
             Substitute.For<IPassiveProxyBuffer>(),
             Substitute.For<ICaptureBatchWriter>(),
             Substitute.For<IProtocolMessageWriter>(),
@@ -81,8 +81,8 @@ public class GracefulShutdownTests
             Substitute.For<IAnomalyAlertPublisher>(),
             new SslStripService(NullLogger<SslStripService>.Instance),
             Substitute.For<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-            Substitute.For<Polly.Registry.ResiliencePipelineProvider<string>>(),
             Substitute.For<IPerHostConnectPipelineCache>(),
+            Substitute.For<IUpstreamConnectionPool>(),
             Substitute.For<IProtocolMessageWriter>(),
             NullLogger<TransparentProxyServer>.Instance);
     }

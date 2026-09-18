@@ -178,7 +178,10 @@ builder.Services.AddSingleton<CollaborationPublisher>();
 var resilienceOptions = builder.Configuration
     .GetSection(ResilienceOptions.SectionName)
     .Get<ResilienceOptions>() ?? new ResilienceOptions();
-builder.Services.AddProxyResilience(resilienceOptions);
+var connectionPoolOptions = builder.Configuration
+    .GetSection(UpstreamConnectionPoolOptions.SectionName)
+    .Get<UpstreamConnectionPoolOptions>() ?? new UpstreamConnectionPoolOptions();
+builder.Services.AddProxyResilience(resilienceOptions, connectionPoolOptions);
 
 // ── Proxy ────────────────────────────────────────────────────────────────────
 // All proxy servers and supporting engines are singletons (long-lived TCP listeners)

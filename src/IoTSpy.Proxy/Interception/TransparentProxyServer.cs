@@ -40,8 +40,8 @@ public class TransparentProxyServer(
     IAnomalyAlertPublisher anomalyPublisher,
     SslStripService sslStripService,
     IServiceScopeFactory scopeFactory,
-    ResiliencePipelineProvider<string> connectPipelineProvider,
     IPerHostConnectPipelineCache perHostPipelines,
+    IUpstreamConnectionPool connectionPool,
     IProtocolMessageWriter protocolMessageWriter,
     ILogger<TransparentProxyServer> logger)
 {
@@ -187,54 +187,11 @@ public class TransparentProxyServer(
             ApplicationProtocols = [SslApplicationProtocol.Http11]
         }, ct);
 
-        // Connect to real upstream — per-host pipeline.
-        var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
-        {
-            await upstreamTcp.ConnectAsync(host, port, token);
-            return upstreamTcp;
-        }, ct);
-
-        using (upstreamTcp)
-        {
-            using var sslUpstream = new SslStream(upstreamTcp.GetStream());
-            await connectPipelineProvider.GetPipeline(ProxyResiliencePipelines.TlsPipelineKey).ExecuteAsync(async token =>
-            {
-                await sslUpstream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                {
-                    TargetHost = host,
-                    RemoteCertificateValidationCallback = (_, _, _, _) => true
-                }, token);
-            }, ct);
-
-            // Upstream servers often close idle keep-alive connections well before the
-            // client does — InterceptHttpStreamAsync reuses this one connection for every
-            // request the client sends, so a request arriving after the upstream has
-            // already closed needs a fresh connection rather than a zero-byte response.
-            async Task<Stream> ReconnectAsync(CancellationToken token)
-            {
-                var freshTcp = new TcpClient();
-                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
-                {
-                    await freshTcp.ConnectAsync(host, port, t);
-                    return freshTcp;
-                }, token);
-                var freshSsl = new SslStream(freshTcp.GetStream());
-                await connectPipelineProvider.GetPipeline(ProxyResiliencePipelines.TlsPipelineKey).ExecuteAsync(async t =>
-                {
-                    await freshSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                    {
-                        TargetHost = host,
-                        RemoteCertificateValidationCallback = (_, _, _, _) => true
-                    }, t);
-                }, token);
-                return freshSsl;
-            }
-
-            await InterceptHttpStreamAsync(sslClient, sslUpstream, host, port, "https",
-                sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
-                clientIp, settings, scope, ct, reconnectUpstream: ReconnectAsync);
-        }
+        // Upstream connections come from the shared pool (reused across every client
+        // device, not just this one) rather than a dedicated connection opened per client.
+        await InterceptHttpStreamAsync(sslClient, host, port, isTls: true, "https",
+            sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
+            clientIp, settings, scope, ct);
     }
 
     // ── Plain HTTP transparent interception ──────────────────────────────────
@@ -245,32 +202,10 @@ public class TransparentProxyServer(
     {
         var clientStream = client.GetStream();
 
-        // Connect to real upstream — per-host pipeline.
-        var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
-        {
-            await upstreamTcp.ConnectAsync(host, port, token);
-            return upstreamTcp;
-        }, ct);
-
-        using (upstreamTcp)
-        {
-            var upstreamStream = upstreamTcp.GetStream();
-
-            async Task<Stream> ReconnectAsync(CancellationToken token)
-            {
-                var freshTcp = new TcpClient();
-                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
-                {
-                    await freshTcp.ConnectAsync(host, port, t);
-                    return freshTcp;
-                }, token);
-                return freshTcp.GetStream();
-            }
-
-            await InterceptHttpStreamAsync(clientStream, upstreamStream, host, port, "http",
-                string.Empty, string.Empty, clientIp, settings, scope, ct, reconnectUpstream: ReconnectAsync);
-        }
+        // Upstream connections come from the shared pool (reused across every client
+        // device, not just this one) rather than a dedicated connection opened per client.
+        await InterceptHttpStreamAsync(clientStream, host, port, isTls: false, "http",
+            string.Empty, string.Empty, clientIp, settings, scope, ct);
     }
 
     // ── TLS passthrough with metadata capture ─────────────────────────────
@@ -511,37 +446,34 @@ public class TransparentProxyServer(
     // ── HTTP stream interception (shared with ExplicitProxyServer) ───────────
 
     private async Task InterceptHttpStreamAsync(
-        Stream clientStream, Stream upstreamStream,
-        string host, int port, string scheme,
+        Stream clientStream,
+        string host, int port, bool isTls, string scheme,
         string tlsVersion, string tlsCipher,
         string clientIp, ProxySettings settings,
-        IServiceScope scope, CancellationToken ct,
-        Func<CancellationToken, Task<Stream>>? reconnectUpstream = null)
+        IServiceScope scope, CancellationToken ct)
     {
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-        var reconnectedStreams = new List<Stream>();
 
-        async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> WriteAndReadWithRetryAsync(
+        async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
             string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
         {
-            await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-            var result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
-            if (result.firstLine is null && reconnectUpstream is not null)
+            var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+            await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+            var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+            if (result.firstLine is null)
             {
                 logger.LogInformation(
-                    "Stale upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
+                    "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
                     host, port, wReqLine);
-                upstreamStream = await reconnectUpstream(ct);
-                reconnectedStreams.Add(upstreamStream);
-                await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+                connectionPool.Discard(upstream);
+                upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+                result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
             }
-            return result;
+            return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
         }
 
-        try
-        {
         while (!ct.IsCancellationRequested)
         {
             var (reqLine, reqHeaders, reqBody, reqBodyBytes) = await ReadHttpMessageAsync(clientStream, settings.MaxBodySizeKb, ct);
@@ -581,8 +513,9 @@ public class TransparentProxyServer(
             }
 
             string? statusLine = null; string respHeaders = string.Empty; string respBody = string.Empty; byte[] respBodyBytes = [];
+            Stream? transparentUpstream = null;
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine, respHeaders, respBody, respBodyBytes) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
+                (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
             // Decode Content-Encoding for storage (original compressed bytes still forwarded to client)
             if (respBodyBytes.Length > 0)
@@ -727,8 +660,11 @@ public class TransparentProxyServer(
                 await captures.UpdateAsync(capture, ct);
 
                 logger.LogInformation("WebSocket upgrade detected for {Host}{Path}, relaying frames", host, path);
-                await RelayWebSocketFramesAsync(clientStream, upstreamStream, capture.Id,
+                // An upgraded connection is never reusable for ordinary requests again —
+                // discard it from the pool once the relay finishes, rather than returning it.
+                await RelayWebSocketFramesAsync(clientStream, transparentUpstream!, capture.Id,
                     host, clientIp, captures, ct);
+                connectionPool.Discard(transparentUpstream!);
                 break;
             }
 
@@ -744,15 +680,16 @@ public class TransparentProxyServer(
                 }
             }
 
+            if (transparentUpstream is not null)
+            {
+                var transparentReusable = IsConnectionReusable(statusLine, respHeaders);
+                if (transparentReusable) connectionPool.Return(host, port, isTls, transparentUpstream);
+                else connectionPool.Discard(transparentUpstream);
+            }
+
             if (respHeaders.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
-        }
-        }
-        finally
-        {
-            foreach (var s in reconnectedStreams)
-                s.Dispose();
         }
     }
 
@@ -1102,6 +1039,21 @@ public class TransparentProxyServer(
         var parts = statusLine.Split(' ', 3);
         if (parts.Length < 2 || !int.TryParse(parts[1], out var code)) return false;
         return code is 204 or 304 || (code >= 100 && code < 200);
+    }
+
+    /// <summary>
+    /// Whether an upstream connection can be returned to the pool for reuse: HTTP/1.1 is
+    /// persistent by default unless "Connection: close" is present; HTTP/1.0 is the reverse
+    /// — non-persistent by default unless the server explicitly opts in with
+    /// "Connection: keep-alive". Missing this distinction meant HTTP/1.0 responses (which
+    /// the server had already closed) got treated as reusable, defeating pooling entirely.
+    /// </summary>
+    private static bool IsConnectionReusable(string? statusLine, string headers)
+    {
+        if (headers.Contains("Connection: close", StringComparison.OrdinalIgnoreCase)) return false;
+        if (statusLine is not null && statusLine.StartsWith("HTTP/1.0", StringComparison.OrdinalIgnoreCase))
+            return headers.Contains("Connection: keep-alive", StringComparison.OrdinalIgnoreCase);
+        return true;
     }
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)

@@ -37,8 +37,8 @@ public class ExplicitProxyServer(
     IAnomalyAlertPublisher anomalyPublisher,
     SslStripService sslStripService,
     IServiceScopeFactory scopeFactory,
-    ResiliencePipelineProvider<string> connectPipelineProvider,
     IPerHostConnectPipelineCache perHostPipelines,
+    IUpstreamConnectionPool connectionPool,
     IPassiveProxyBuffer passiveBuffer,
     ICaptureBatchWriter captureBatchWriter,
     IProtocolMessageWriter protocolMessageWriter,
@@ -201,54 +201,12 @@ public class ExplicitProxyServer(
             ApplicationProtocols = [SslApplicationProtocol.Http11]
         }, ct);
 
-        // Resilient connect to upstream — per-host pipeline so one dead endpoint
-        // does not open the circuit for all other upstream targets.
-        var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
-        {
-            await upstreamTcp.ConnectAsync(host, port, token);
-            return upstreamTcp;
-        }, ct);
-
-        using (upstreamTcp)
-        {
-            using var sslUpstream = new SslStream(upstreamTcp.GetStream());
-            // Resilient TLS handshake
-            await connectPipelineProvider.GetPipeline(ProxyResiliencePipelines.TlsPipelineKey).ExecuteAsync(async token =>
-            {
-                await sslUpstream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                {
-                    TargetHost = host,
-                    RemoteCertificateValidationCallback = (_, _, _, _) => true
-                }, token);
-            }, ct);
-
-            // See the plain-HTTP reconnect note above — same stale-keep-alive gap applies
-            // to the MITM'd upstream TLS connection.
-            async Task<Stream> ReconnectAsync(CancellationToken token)
-            {
-                var freshTcp = new TcpClient();
-                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
-                {
-                    await freshTcp.ConnectAsync(host, port, t);
-                    return freshTcp;
-                }, token);
-                var freshSsl = new SslStream(freshTcp.GetStream());
-                await connectPipelineProvider.GetPipeline(ProxyResiliencePipelines.TlsPipelineKey).ExecuteAsync(async t =>
-                {
-                    await freshSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                    {
-                        TargetHost = host,
-                        RemoteCertificateValidationCallback = (_, _, _, _) => true
-                    }, t);
-                }, token);
-                return freshSsl;
-            }
-
-            await InterceptHttpStreamAsync(sslClient, sslUpstream, host, port, "https",
-                sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
-                clientIp, settings, scope, ct, reconnectUpstream: ReconnectAsync);
-        }
+        // Upstream connections come from the shared pool (reused across every client
+        // device, not just this one) rather than a dedicated connection opened per
+        // client — see UpstreamConnectionPool for why.
+        await InterceptHttpStreamAsync(sslClient, host, port, isTls: true, "https",
+            sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
+            clientIp, settings, scope, ct);
     }
 
     // ── Plain HTTP ──────────────────────────────────────────────────────────
@@ -275,84 +233,53 @@ public class ExplicitProxyServer(
         int.TryParse(hostHeader.Contains(':') ? hostHeader[(hostHeader.LastIndexOf(':') + 1)..] : "80", out var port);
         if (port == 0) port = 80;
 
-        // Resilient connect to upstream — per-host pipeline.
-        var upstreamTcp = new TcpClient();
-        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
-        {
-            await upstreamTcp.ConnectAsync(host, port, token);
-            return upstreamTcp;
-        }, ct);
-
-        using (upstreamTcp)
-        {
-            var upstreamStream = upstreamTcp.GetStream();
-
-            // Upstream servers often close idle keep-alive connections well before the
-            // client does (e.g. Vite's default 5s Keep-Alive timeout) — InterceptHttpStreamAsync
-            // reuses this one connection for every request the client sends, so a request
-            // arriving after the upstream has already closed needs a fresh connection rather
-            // than silently getting a zero-byte response.
-            async Task<Stream> ReconnectAsync(CancellationToken token)
-            {
-                var freshTcp = new TcpClient();
-                await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async t =>
-                {
-                    await freshTcp.ConnectAsync(host, port, t);
-                    return freshTcp;
-                }, token);
-                return freshTcp.GetStream();
-            }
-
-            await InterceptHttpStreamAsync(clientStream, upstreamStream, host, port, "http",
-                string.Empty, string.Empty, clientIp, settings, scope, ct,
-                initialRequest: (reqLine, reqHeaders, reqBody, reqBodyBytes),
-                reconnectUpstream: ReconnectAsync);
-        }
+        // Upstream connections come from the shared pool (reused across every client
+        // device, not just this one) rather than a dedicated connection opened per client.
+        await InterceptHttpStreamAsync(clientStream, host, port, isTls: false, "http",
+            string.Empty, string.Empty, clientIp, settings, scope, ct,
+            initialRequest: (reqLine, reqHeaders, reqBody, reqBodyBytes));
     }
 
     // ── HTTP parse + record ─────────────────────────────────────────────────
 
     private async Task InterceptHttpStreamAsync(
-        Stream clientStream, Stream upstreamStream,
-        string host, int port, string scheme,
+        Stream clientStream,
+        string host, int port, bool isTls, string scheme,
         string tlsVersion, string tlsCipher,
         string clientIp, ProxySettings settings,
         IServiceScope scope,
         CancellationToken ct,
-        (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null,
-        Func<CancellationToken, Task<Stream>>? reconnectUpstream = null)
+        (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null)
     {
         var isPassive = settings.Mode == Core.Enums.ProxyMode.Passive;
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = isPassive ? null : scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-        var reconnectedStreams = new List<Stream>();
 
-        // Upstream keep-alive connections routinely get reused across many requests over
-        // this method's lifetime (one per client TCP connection). If the upstream server
-        // already closed its end (its own, often shorter, keep-alive timeout elapsed) our
-        // next write can still succeed locally while the read comes back immediately empty
-        // — reconnecting once and replaying the exact same request recovers transparently
-        // instead of returning a blank response to the client.
-        async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> WriteAndReadWithRetryAsync(
+        // Each request checks out a connection from the shared pool rather than reusing one
+        // dedicated connection for this client's entire session — see UpstreamConnectionPool.
+        // A pooled connection can be dead (the peer closed it after its own, often shorter,
+        // keep-alive timeout elapsed) despite passing the pool's liveness check; detect that
+        // by an immediately-empty read after writing, discard it, and retry once on a fresh
+        // checkout before giving up.
+        async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
             string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
         {
-            await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-            var result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
-            if (result.firstLine is null && reconnectUpstream is not null)
+            var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+            await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+            var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+            if (result.firstLine is null)
             {
                 logger.LogInformation(
-                    "Stale upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
+                    "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
                     host, port, wReqLine);
-                upstreamStream = await reconnectUpstream(ct);
-                reconnectedStreams.Add(upstreamStream);
-                await WriteHttpMessageAsync(upstreamStream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                result = await ReadHttpMessageAsync(upstreamStream, settings.MaxBodySizeKb, ct, isResponse: true);
+                connectionPool.Discard(upstream);
+                upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+                result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
             }
-            return result;
+            return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
         }
 
-        try
-        {
         while (!ct.IsCancellationRequested)
         {
             // Read request from client — except on the first iteration of the plain-HTTP
@@ -379,8 +306,11 @@ public class ExplicitProxyServer(
             if (isPassive)
             {
                 // Passive fast-path: forward traffic unchanged, no manipulation, no DB inserts
-                var (statusLine, respHeaders, respBody, respBodyBytes) =
+                var (statusLine, respHeaders, respBody, respBodyBytes, passiveUpstream) =
                     await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
+                var passiveReusable = statusLine is not null && IsConnectionReusable(statusLine, respHeaders);
+                if (passiveReusable) connectionPool.Return(host, port, isTls, passiveUpstream);
+                else connectionPool.Discard(passiveUpstream);
 
                 if (statusLine is not null)
                     await WriteHttpMessageAsync(clientStream, statusLine, respHeaders, respBodyBytes, ct);
@@ -445,8 +375,9 @@ public class ExplicitProxyServer(
 
             // Forward to upstream and read the response (skip if Drop action cleared the request line)
             string? statusLine2 = null; string respHeaders2 = string.Empty; string respBody2 = string.Empty; byte[] respBodyBytes2 = [];
+            Stream? activeUpstream = null;
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine2, respHeaders2, respBody2, respBodyBytes2) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
+                (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
             // Decode Content-Encoding for storage (the original compressed bytes are still
             // forwarded to the client below — we only change what gets persisted in the DB)
@@ -628,21 +559,25 @@ public class ExplicitProxyServer(
                 await captures!.UpdateAsync(capture, ct);
 
                 logger.LogInformation("WebSocket upgrade detected for {Host}{Path}, relaying frames", host, path);
-                await RelayWebSocketFramesAsync(clientStream, upstreamStream, capture.Id,
+                // An upgraded connection is never reusable for ordinary requests again —
+                // discard it from the pool once the relay finishes, rather than returning it.
+                await RelayWebSocketFramesAsync(clientStream, activeUpstream!, capture.Id,
                     host, clientIp, captures!, ct);
+                connectionPool.Discard(activeUpstream!);
                 break;
+            }
+
+            if (activeUpstream is not null)
+            {
+                var activeReusable = IsConnectionReusable(statusLine2, respHeaders2);
+                if (activeReusable) connectionPool.Return(host, port, isTls, activeUpstream);
+                else connectionPool.Discard(activeUpstream);
             }
 
             // HTTP/1.0 or Connection: close — stop after one exchange
             if (respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
-        }
-        }
-        finally
-        {
-            foreach (var s in reconnectedStreams)
-                s.Dispose();
         }
     }
 
@@ -1282,6 +1217,21 @@ public class ExplicitProxyServer(
         var parts = statusLine.Split(' ', 3);
         if (parts.Length < 2 || !int.TryParse(parts[1], out var code)) return false;
         return code is 204 or 304 || (code >= 100 && code < 200);
+    }
+
+    /// <summary>
+    /// Whether an upstream connection can be returned to the pool for reuse: HTTP/1.1 is
+    /// persistent by default unless "Connection: close" is present; HTTP/1.0 is the reverse
+    /// — non-persistent by default unless the server explicitly opts in with
+    /// "Connection: keep-alive". Missing this distinction meant HTTP/1.0 responses (which
+    /// the server had already closed) got treated as reusable, defeating pooling entirely.
+    /// </summary>
+    private static bool IsConnectionReusable(string? statusLine, string headers)
+    {
+        if (headers.Contains("Connection: close", StringComparison.OrdinalIgnoreCase)) return false;
+        if (statusLine is not null && statusLine.StartsWith("HTTP/1.0", StringComparison.OrdinalIgnoreCase))
+            return headers.Contains("Connection: keep-alive", StringComparison.OrdinalIgnoreCase);
+        return true;
     }
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
