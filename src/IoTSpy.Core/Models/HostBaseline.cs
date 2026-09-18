@@ -12,6 +12,13 @@ public sealed class HostBaseline
     /// <summary>Total number of observations recorded.</summary>
     public long SampleCount { get; set; }
 
+    /// <summary>
+    /// Timestamp of the first observation ever recorded for this host (set once).
+    /// Used as the denominator anchor for the historical request-rate calculation,
+    /// so persisting/restoring a large <see cref="SampleCount"/> doesn't distort it.
+    /// </summary>
+    public DateTimeOffset FirstSeenAt { get; set; }
+
     // Response duration (ms) — Welford running state
     public double DurationMean { get; set; }
     public double DurationM2 { get; set; }   // sum of squared deviations

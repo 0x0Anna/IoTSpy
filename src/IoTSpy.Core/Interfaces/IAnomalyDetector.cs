@@ -32,4 +32,20 @@ public interface IAnomalyDetector
     /// Clears the baseline and observation window for the specified host.
     /// </summary>
     void Reset(string host);
+
+    /// <summary>
+    /// Returns a defensive, point-in-time snapshot of every host's baseline statistics,
+    /// safe to read from any thread. Each host's data is copied out while holding that
+    /// host's internal lock (the same lock <see cref="Record"/> uses), so callers never
+    /// observe torn state and never need to synchronize with the detector themselves.
+    /// The sliding request-rate window is intentionally excluded (not worth persisting).
+    /// </summary>
+    IReadOnlyList<HostBaselineSnapshot> SnapshotBaselines();
+
+    /// <summary>
+    /// Restores previously-persisted baseline checkpoints into the live in-memory state,
+    /// bypassing <see cref="Record"/>'s normal warm-up gate — a restored host does not
+    /// need to re-earn its warm-up sample count. Intended for startup recovery only.
+    /// </summary>
+    void Seed(IEnumerable<HostBaselineRecord> records);
 }

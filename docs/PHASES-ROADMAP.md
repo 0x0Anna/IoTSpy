@@ -13,7 +13,7 @@ See [PHASES-COMPLETED.md](PHASES-COMPLETED.md) for all completed work including 
 ### Scanner & Anomaly
 - **Scan findings correlation** — Client-side grouping by type/CVE/service *within* a single scan job's results shipped (`ScanFindingsView`, frontend-only); cross-scan-job / cross-device correlation ("this CVE affects 4 devices") is still open — there is no fleet-wide findings query surface today (`ScannerController` only exposes `jobs/{id}/findings`)
 - **Custom anomaly rules** — Declarative anomaly rules (similar to the manipulation rules engine) to flag specific traffic patterns; replaces purely statistical Welford baseline
-- **Behavioral fingerprinting** — Persistent per-device baseline across proxy restarts; detect changes in device communication patterns over time
+- **Behavioral fingerprinting** — Host-level Welford baselines (duration/size/status-code) now persist across restarts (`HostBaselineCheckpointService` + `HostBaselines` table — see `docs/GAPS.md` Design Assumptions #5). Still open: device-level (rather than host-level) keying, and detecting *changes* in device communication patterns over time (pattern-drift analysis over the persisted history) — this PR only persists and restores the existing point-in-time statistical baseline, it doesn't analyze how that baseline drifts
 - **Behavioral inference / privacy-leakage module** — Infer occupant activity/routines from packet metadata alone (below TLS); see [PLAN-BEHAVIORAL-INFERENCE.md](PLAN-BEHAVIORAL-INFERENCE.md) for the full design
 
 ### Protocol Decoder Depth

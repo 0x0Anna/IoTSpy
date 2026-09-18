@@ -61,6 +61,9 @@ public DbSet<OpenRtbEvent> OpenRtbEvents => Set<OpenRtbEvent>();
     // ML analytics — traffic insights
     public DbSet<TrafficInsight> TrafficInsights => Set<TrafficInsight>();
 
+    // Anomaly detector baseline persistence
+    public DbSet<HostBaselineRecord> HostBaselines => Set<HostBaselineRecord>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Device>(e =>
@@ -292,6 +295,14 @@ modelBuilder.Entity<OpenRtbPiiPolicy>(e =>
             e.HasIndex(m => m.Timestamp);
             e.HasIndex(m => m.DeviceId);
             e.HasIndex(m => m.Protocol);
+        });
+
+        modelBuilder.Entity<HostBaselineRecord>(e =>
+        {
+            e.HasKey(r => r.Host);
+            e.Property(r => r.Host).HasMaxLength(255);
+            e.Property(r => r.StatusCodeCountsJson).IsRequired();
+            e.HasIndex(r => r.UpdatedAt);
         });
 
         // API Spec & Content Replacement
