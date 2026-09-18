@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Security;
@@ -456,13 +457,13 @@ public class TransparentProxyServer(
         var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
 
         async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
-            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
+            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod)
         {
             var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
             try
             {
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true, requestMethod: wMethod);
                 if (result.firstLine is null)
                 {
                     logger.LogInformation(
@@ -471,7 +472,7 @@ public class TransparentProxyServer(
                     connectionPool.Discard(upstream);
                     upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
                     await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                    result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                    result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true, requestMethod: wMethod);
                 }
                 return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
             }
@@ -529,7 +530,7 @@ public class TransparentProxyServer(
             try
             {
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
+                (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method);
 
             // Decode Content-Encoding for storage (original compressed bytes still forwarded to client)
             if (respBodyBytes.Length > 0)
@@ -899,11 +900,12 @@ public class TransparentProxyServer(
     private const int WireBodySafetyCeilingBytes = 200 * 1024 * 1024;
 
     private static async Task<(string? firstLine, string headers, string body, byte[] bodyBytes)> ReadHttpMessageAsync(
-        Stream stream, int maxBodyKb, CancellationToken ct, bool isResponse = false)
+        Stream stream, int maxBodyKb, CancellationToken ct, bool isResponse = false, string? requestMethod = null)
     {
         string? firstLine = null;
         var headerLines = new List<string>();
         int contentLength = 0;
+        var hasContentLength = false;
         bool chunked = false;
 
         while (true)
@@ -913,9 +915,16 @@ public class TransparentProxyServer(
             if (firstLine is null) { firstLine = line; continue; }
             if (string.IsNullOrEmpty(line)) break;
             headerLines.Add(line);
-            if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
-                int.TryParse(line[15..].Trim(), out contentLength);
-            if (line.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            // "Content-Length: 0" (an explicit, complete, empty body) and "no Content-Length
+            // header at all" (ambiguous framing, needs another signal) are different wire
+            // states that a single `contentLength` int can't distinguish — both parse/default
+            // to 0. Track presence separately so a bodyless-but-complete response isn't
+            // mistaken for one whose end is only knowable by the connection closing.
+            if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(line[15..].Trim(), out contentLength))
+                hasContentLength = true;
+            if (line.StartsWith("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
+                && line.Contains("chunked", StringComparison.OrdinalIgnoreCase))
                 chunked = true;
         }
 
@@ -929,7 +938,11 @@ public class TransparentProxyServer(
         // keep-alive connection the server has no intention of closing, so treating them
         // as close-delimited (or trusting a stray Content-Length) can hang forever waiting
         // for bytes that will never arrive.
-        var noBody = isResponse && firstLine is not null && IsBodylessStatus(firstLine);
+        // Per RFC 7230 §3.3.2/§3.3.3 rule 1: a response to a HEAD request carries the
+        // Content-Length the corresponding GET would have had, but never actually sends a
+        // body — trusting that header and calling ReadExactlyAsync for it blocks forever.
+        var noBody = isResponse && firstLine is not null &&
+            (IsBodylessStatus(firstLine) || string.Equals(requestMethod, "HEAD", StringComparison.OrdinalIgnoreCase));
 
         if (noBody)
         {
@@ -954,7 +967,7 @@ public class TransparentProxyServer(
         }
 
         var closeDelimited = false;
-        if (isResponse && !noBody && contentLength <= 0 && !chunked)
+        if (isResponse && !noBody && !hasContentLength && !chunked)
         {
             // Neither Content-Length nor chunked encoding: per RFC 7230 §3.3.3 this is only
             // legal for a response, whose body is then delimited by the connection closing.
@@ -1007,7 +1020,8 @@ public class TransparentProxyServer(
         {
             var sizeLine = await ReadLineAsync(stream, ct);
             if (sizeLine is null) break;
-            var chunkSize = Convert.ToInt32(sizeLine.Trim().Split(';')[0], 16);
+            if (!int.TryParse(sizeLine.Trim().Split(';')[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var chunkSize))
+                break; // malformed chunk-size line — stop rather than throw and kill the connection
             if (chunkSize == 0)
             {
                 await ReadLineAsync(stream, ct);
