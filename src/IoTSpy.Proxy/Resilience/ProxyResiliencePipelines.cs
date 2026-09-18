@@ -32,7 +32,8 @@ public static class ProxyResiliencePipelines
     /// </summary>
     public static IServiceCollection AddProxyResilience(
         this IServiceCollection services,
-        ResilienceOptions opts)
+        ResilienceOptions opts,
+        UpstreamConnectionPoolOptions? poolOpts = null)
     {
         // Per-host connect pipeline: keyed on the upstream hostname so that a
         // dead IoT cloud endpoint does not trip the circuit breaker for other hosts.
@@ -77,6 +78,11 @@ public static class ProxyResiliencePipelines
         });
 
         services.AddSingleton<IPerHostConnectPipelineCache>(new PerHostConnectPipelineCache(opts));
+
+        services.AddSingleton(poolOpts ?? new UpstreamConnectionPoolOptions());
+        services.AddSingleton<UpstreamConnectionPool>();
+        services.AddSingleton<IUpstreamConnectionPool>(sp => sp.GetRequiredService<UpstreamConnectionPool>());
+        services.AddHostedService<UpstreamConnectionPoolEvictionService>();
 
         return services;
     }
