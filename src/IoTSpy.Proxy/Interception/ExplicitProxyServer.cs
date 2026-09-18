@@ -265,19 +265,30 @@ public class ExplicitProxyServer(
             string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
         {
             var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
-            await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-            var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
-            if (result.firstLine is null)
+            try
             {
-                logger.LogInformation(
-                    "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
-                    host, port, wReqLine);
-                connectionPool.Discard(upstream);
-                upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                if (result.firstLine is null)
+                {
+                    logger.LogInformation(
+                        "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
+                        host, port, wReqLine);
+                    connectionPool.Discard(upstream);
+                    upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                    await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+                    result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                }
+                return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
             }
-            return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
+            catch
+            {
+                // A write/read failure other than the handled "stale connection" case (e.g. a
+                // genuine network error, timeout, or cancellation) must not leak the checked-out
+                // connection — the caller never gets a chance to return/discard it otherwise.
+                connectionPool.Discard(upstream);
+                throw;
+            }
         }
 
         while (!ct.IsCancellationRequested)
@@ -376,6 +387,9 @@ public class ExplicitProxyServer(
             // Forward to upstream and read the response (skip if Drop action cleared the request line)
             string? statusLine2 = null; string respHeaders2 = string.Empty; string respBody2 = string.Empty; byte[] respBodyBytes2 = [];
             Stream? activeUpstream = null;
+            var activeUpstreamReleased = false;
+            try
+            {
             if (!string.IsNullOrEmpty(reqLine))
                 (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
@@ -564,6 +578,7 @@ public class ExplicitProxyServer(
                 await RelayWebSocketFramesAsync(clientStream, activeUpstream!, capture.Id,
                     host, clientIp, captures!, ct);
                 connectionPool.Discard(activeUpstream!);
+                activeUpstreamReleased = true;
                 break;
             }
 
@@ -572,12 +587,19 @@ public class ExplicitProxyServer(
                 var activeReusable = IsConnectionReusable(statusLine2, respHeaders2);
                 if (activeReusable) connectionPool.Return(host, port, isTls, activeUpstream);
                 else connectionPool.Discard(activeUpstream);
+                activeUpstreamReleased = true;
             }
 
             // HTTP/1.0 or Connection: close — stop after one exchange
             if (respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
+            }
+            finally
+            {
+                if (activeUpstream is not null && !activeUpstreamReleased)
+                    connectionPool.Discard(activeUpstream);
+            }
         }
     }
 

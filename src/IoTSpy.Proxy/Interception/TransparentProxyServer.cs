@@ -459,19 +459,30 @@ public class TransparentProxyServer(
             string wReqLine, string wReqHeaders, byte[] wReqBodyBytes)
         {
             var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
-            await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-            var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
-            if (result.firstLine is null)
+            try
             {
-                logger.LogInformation(
-                    "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
-                    host, port, wReqLine);
-                connectionPool.Discard(upstream);
-                upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
-                result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                var result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                if (result.firstLine is null)
+                {
+                    logger.LogInformation(
+                        "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
+                        host, port, wReqLine);
+                    connectionPool.Discard(upstream);
+                    upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                    await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
+                    result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true);
+                }
+                return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
             }
-            return (result.firstLine, result.headers, result.body, result.bodyBytes, upstream);
+            catch
+            {
+                // A write/read failure other than the handled "stale connection" case (e.g. a
+                // genuine network error, timeout, or cancellation) must not leak the checked-out
+                // connection — the caller never gets a chance to return/discard it otherwise.
+                connectionPool.Discard(upstream);
+                throw;
+            }
         }
 
         while (!ct.IsCancellationRequested)
@@ -514,6 +525,9 @@ public class TransparentProxyServer(
 
             string? statusLine = null; string respHeaders = string.Empty; string respBody = string.Empty; byte[] respBodyBytes = [];
             Stream? transparentUpstream = null;
+            var transparentUpstreamReleased = false;
+            try
+            {
             if (!string.IsNullOrEmpty(reqLine))
                 (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes);
 
@@ -665,6 +679,7 @@ public class TransparentProxyServer(
                 await RelayWebSocketFramesAsync(clientStream, transparentUpstream!, capture.Id,
                     host, clientIp, captures, ct);
                 connectionPool.Discard(transparentUpstream!);
+                transparentUpstreamReleased = true;
                 break;
             }
 
@@ -685,11 +700,18 @@ public class TransparentProxyServer(
                 var transparentReusable = IsConnectionReusable(statusLine, respHeaders);
                 if (transparentReusable) connectionPool.Return(host, port, isTls, transparentUpstream);
                 else connectionPool.Discard(transparentUpstream);
+                transparentUpstreamReleased = true;
             }
 
             if (respHeaders.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
+            }
+            finally
+            {
+                if (transparentUpstream is not null && !transparentUpstreamReleased)
+                    connectionPool.Discard(transparentUpstream);
+            }
         }
     }
 
