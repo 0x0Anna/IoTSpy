@@ -10,19 +10,21 @@ namespace IoTSpy.Proxy.Resilience;
 
 public interface IPerHostConnectPipelineCache
 {
-    ResiliencePipeline GetPipeline(string host);
+    ResiliencePipeline GetPipeline(string host, int port);
 }
 
 /// <summary>
-/// Lazily creates and caches one <see cref="ResiliencePipeline"/> per upstream hostname
-/// so that a broken circuit on one host never blocks connections to other hosts.
+/// Lazily creates and caches one <see cref="ResiliencePipeline"/> per upstream host:port
+/// so that a broken circuit on one endpoint never blocks connections to other hosts —
+/// or other ports on the same host (e.g. a dead service on :80 must not trip the breaker
+/// for an unrelated, healthy service on :3000 at the same IP).
 /// </summary>
 public sealed class PerHostConnectPipelineCache(ResilienceOptions opts) : IPerHostConnectPipelineCache
 {
     private readonly ConcurrentDictionary<string, ResiliencePipeline> _cache = new(StringComparer.OrdinalIgnoreCase);
 
-    public ResiliencePipeline GetPipeline(string host) =>
-        _cache.GetOrAdd(host, _ => Build());
+    public ResiliencePipeline GetPipeline(string host, int port) =>
+        _cache.GetOrAdd($"{host}:{port}", _ => Build());
 
     private ResiliencePipeline Build() =>
         new ResiliencePipelineBuilder()
