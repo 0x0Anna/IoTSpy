@@ -34,6 +34,7 @@ function formatDate(iso: string | null): string {
 }
 
 const STATS_KEY = ['admin-stats']
+const RETENTION_KEY = ['admin-retention']
 
 export default function DatabaseTab() {
   const queryClient = useQueryClient()
@@ -59,7 +60,7 @@ export default function DatabaseTab() {
   })
 
   const { data: retentionData } = useQuery<RetentionSettings>({
-    queryKey: ['admin-retention'],
+    queryKey: RETENTION_KEY,
     queryFn: () => apiFetch<RetentionSettings>('/api/admin/retention'),
   })
 
@@ -74,8 +75,15 @@ export default function DatabaseTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
       }),
-    onSuccess: () => {
+    onSuccess: (_result, savedSettings) => {
       showToast('Retention settings saved')
+      // Seed the cache with exactly what the server just accepted, rather than only
+      // invalidating — invalidation alone would refetch async and the sync effect above
+      // would briefly re-apply the now-stale cached value in the gap, snapping the UI
+      // back to the old value until the refetch resolved (visible as "it reverts until
+      // I reload"). Setting the cache directly is immediate and matches the server state
+      // exactly since the PUT body *is* the new settings.
+      queryClient.setQueryData(RETENTION_KEY, savedSettings)
       setRetentionDirty(false)
     },
     onError: () => showToast('Failed to save retention settings'),
