@@ -309,6 +309,26 @@ public class ExplicitProxyServer(
             }
             if (reqLine is null) break;
 
+            // A client's persistent connection to an explicit HTTP proxy is not pinned to a
+            // single upstream host — reusing one connection for several *different* target
+            // hosts is normal, correct proxy client behavior (unlike a CONNECT/TLS tunnel,
+            // which is inherently pinned for its lifetime). host/port were only captured
+            // once, from the very first request on this connection; re-derive them from
+            // each request's own Host header so a later request to a different host doesn't
+            // keep going to whatever host the first request targeted.
+            if (!isTls)
+            {
+                var reqHostHeader = ExtractHeaderValue(reqHeaders, "Host");
+                if (reqHostHeader is not null)
+                {
+                    var reqHost = reqHostHeader.Contains(':') ? reqHostHeader[..reqHostHeader.LastIndexOf(':')] : reqHostHeader;
+                    int.TryParse(reqHostHeader.Contains(':') ? reqHostHeader[(reqHostHeader.LastIndexOf(':') + 1)..] : "80", out var reqPort);
+                    if (reqPort == 0) reqPort = 80;
+                    host = reqHost;
+                    port = reqPort;
+                }
+            }
+
             var started = DateTimeOffset.UtcNow;
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
