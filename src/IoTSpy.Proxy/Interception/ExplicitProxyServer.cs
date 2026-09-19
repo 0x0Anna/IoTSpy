@@ -333,6 +333,21 @@ public class ExplicitProxyServer(
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             ParseRequestLine(reqLine, out var method, out var path, out var query);
+
+            // An explicit-proxy client correctly sends absolute-form request targets for
+            // plain HTTP (e.g. "GET http://host/path HTTP/1.1") — that's normal, spec-correct
+            // proxy-client behavior. But forwarding that line to the upstream unchanged breaks
+            // any origin server whose own routing matches against the literal request-target
+            // string (common for lightweight dev servers like Vite): it sees the full absolute
+            // URI instead of just "/path", fails to match any route, and falls back to serving
+            // its SPA shell (index.html) for what should have been e.g. a JS module request. A
+            // proxy is expected to rewrite the request-target to origin-form before forwarding
+            // to the origin (RFC 7230 §5.3.1). Reconstructing here is a no-op for requests that
+            // were already origin-form (CONNECT-tunneled HTTPS, transparent mode).
+            var lastSpace = reqLine.LastIndexOf(' ');
+            var httpVersion = lastSpace >= 0 ? reqLine[(lastSpace + 1)..] : "HTTP/1.1";
+            reqLine = $"{method} {path}{(string.IsNullOrEmpty(query) ? "" : "?" + query)} {httpVersion}";
+
             var contentType = ExtractHeaderValue(reqHeaders, "Content-Type") ?? "";
 
             if (isPassive)
