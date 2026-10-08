@@ -498,5 +498,9 @@ $RECYCLE.BIN/
 # Local-only Claude settings
 .claude/**/*.local.*
 
+# Superpowers plugin scratch output (brainstorm sessions, generated plans)
+.superpowers/
+docs/superpowers/
+
 # Built APK artifacts
 dist/
