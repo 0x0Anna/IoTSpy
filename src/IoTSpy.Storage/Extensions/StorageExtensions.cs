@@ -2,6 +2,7 @@ using IoTSpy.Core.Interfaces;
 using IoTSpy.Storage.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace IoTSpy.Storage.Extensions;
 
@@ -92,6 +93,47 @@ services.AddScoped<IOpenRtbEventRepository, OpenRtbEventRepository>();
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IoTSpyDbContext>();
+
+        if (db.Database.IsNpgsql())
+        {
+            // Migrations are SQLite-only (DesignTimeDbContextFactory targets SQLite), so Postgres
+            // builds its schema from the model. EnsureCreated does nothing once tables exist, so
+            // model changes after the first start need the database recreated.
+            var created = await db.Database.EnsureCreatedAsync();
+            if (!created)
+            {
+                var logger = scope.ServiceProvider.GetRequiredService<ILogger<IoTSpyDbContext>>();
+                logger.LogWarning(
+                    "PostgreSQL schema already exists and is not upgraded automatically. " +
+                    "Drop and recreate the database after model changes.");
+            }
+
+            // The audit write-once trigger comes from a migration, which EnsureCreated skips.
+            // The statements are idempotent, so they also apply to databases created earlier.
+            foreach (var sql in PostgresAuditTriggerStatements)
+                await db.Database.ExecuteSqlRawAsync(sql);
+            return;
+        }
+
         await db.Database.MigrateAsync();
     }
+
+    // Mirrors the Postgres branch of Migrations/20260509021500_AuditWriteOnceTrigger.cs.
+    private static readonly string[] PostgresAuditTriggerStatements =
+    [
+        """
+        CREATE OR REPLACE FUNCTION prevent_audit_update_fn()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'AuditEntries are immutable and cannot be modified';
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+        """DROP TRIGGER IF EXISTS prevent_audit_update ON "AuditEntries";""",
+        """
+        CREATE TRIGGER prevent_audit_update
+        BEFORE UPDATE ON "AuditEntries"
+        FOR EACH ROW EXECUTE FUNCTION prevent_audit_update_fn();
+        """,
+    ];
 }

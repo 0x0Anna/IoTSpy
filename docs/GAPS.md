@@ -74,7 +74,7 @@ Decoders exist for all major protocols but vary in depth:
 These assumptions should be revisited if requirements change:
 
 1. **Single-instance proxy per deployment** — Assumes one API process and one pair of proxy servers (explicit + transparent). Horizontal scaling requires Redis backplane (Phase 16.8).
-2. **SQLite for development, Postgres for production** — Current schema and migrations support both, but testing is primary on SQLite.
+2. **SQLite for development, Postgres for production** — EF migrations are SQLite-only. Postgres builds its schema from the model on first start and is not upgraded across model changes. Testing is primary on SQLite.
 3. **Browser-based dashboard** — Assumes web client; no native mobile apps or CLI tools planned.
 4. **JWT + API key auth only** — No SAML/LDAP support (Phase 16.5 deprioritized; see Active Gaps).
 5. ~~**In-memory anomaly detector** — Resets on restart; no persistent baseline learning.~~ **Resolved.** `AnomalyDetector`'s per-host Welford baseline (duration/size means+variance, status-code histogram) is now checkpointed to the `HostBaselines` table every 30s and on graceful shutdown (`HostBaselineCheckpointService`), and restored at startup via `IAnomalyDetector.Seed(...)` — a restored host does not need to re-earn its warm-up sample count. This is host-keyed, not device-keyed, and does not add pattern-drift detection over the persisted history — see `PHASES-ROADMAP.md`'s narrowed "Behavioral fingerprinting" line for what's still open.
@@ -105,7 +105,7 @@ All previously open items resolved — see Resolved Items below.
 - API endpoints require Bearer token or API key; rate limiting enabled by default; dev overrides via `appsettings.Development.json`
 - TLS MITM disabled in passthrough mode (`CaptureTls=false`); metadata extraction only
 - SSL stripping requires explicit `SslStrip=true` flag; off by default
-- **Audit log write-once enforced at DB level** — SQLite `BEFORE UPDATE` trigger on `AuditEntries` (`AuditWriteOnceTrigger` migration); deletions still permitted for data retention
+- **Audit log write-once enforced at DB level** — SQLite `BEFORE UPDATE` trigger on `AuditEntries` (`AuditWriteOnceTrigger` migration). On Postgres the same trigger is applied at startup by `StorageExtensions`. Deletions still permitted for data retention
 - Breakpoint scripts execute arbitrary C# (Roslyn) and JavaScript (Jint) — no sandbox restrictions; operator-role required but worth documenting explicitly
 
 ---

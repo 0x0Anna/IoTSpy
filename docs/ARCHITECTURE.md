@@ -754,4 +754,4 @@ Update `AiMock:Provider` in `appsettings.json` to `claude`, `openai`, or `ollama
 
 ### Switching database
 
-Set `Database:Provider` to `postgres` and provide a Postgres connection string in `Database:ConnectionString`. Run `dotnet ef database update` to apply migrations.
+Set `Database:Provider` to `postgres` and provide a Postgres connection string in `Database:ConnectionString`. The schema is created from the model on first start. EF migrations are SQLite-only, so Postgres is not upgraded across model changes: drop and recreate the database after a schema change. The audit write-once trigger is applied at startup. Creating the database needs a role with CREATEDB and access to the `postgres` maintenance database.
