@@ -350,7 +350,12 @@ modelBuilder.Entity<OpenRtbPiiPolicy>(e =>
             e.HasKey(s => s.Id);
             e.HasIndex(s => s.IsActive);
             e.HasIndex(s => s.CreatedByUserId);
-            e.HasIndex(s => s.ShareToken).IsUnique().HasFilter("ShareToken IS NOT NULL");
+            // Postgres folds unquoted identifiers to lowercase, so the filter quotes the column there.
+            // SQLite keeps the original filter so its model still matches the existing migrations.
+            var shareTokenFilter = Database.IsNpgsql()
+                ? "\"ShareToken\" IS NOT NULL"
+                : "ShareToken IS NOT NULL";
+            e.HasIndex(s => s.ShareToken).IsUnique().HasFilter(shareTokenFilter);
             e.Property(s => s.Name).IsRequired().HasMaxLength(200);
             e.Property(s => s.ShareToken).HasMaxLength(64);
         });

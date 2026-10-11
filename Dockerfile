@@ -25,8 +25,10 @@ RUN dotnet publish src/IoTSpy.Api/IoTSpy.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 # SharpPcap / PacketDotNet require libpcap at runtime on Linux
+# Npgsql (PostgreSQL provider) loads the Kerberos GSSAPI library during connection negotiation
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpcap0.8 \
+        libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
