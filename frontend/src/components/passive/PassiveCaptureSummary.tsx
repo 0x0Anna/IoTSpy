@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import '../../styles/passive.css'
-import type { PassiveCaptureSummary as Summary, PassiveCaptureSession } from '../../types/api'
+import type { PassiveCaptureSummary as Summary, PassiveCaptureSession, ProxyMode } from '../../types/api'
 import { useProxy } from '../../hooks/useProxy'
 import {
   clearBuffer,
@@ -38,12 +38,21 @@ export default function PassiveCaptureSummary({ embedded = false }: Props) {
   const [saveDesc, setSaveDesc] = useState('')
   const [saveClear, setSaveClear] = useState(false)
 
+  // The mode to restore when leaving Passive. Tracks the last non-Passive mode seen from the
+  // server (GatewayRedirect, ArpSpoof, ExplicitProxy), so "Active" puts the proxy back exactly
+  // where it was instead of assuming ExplicitProxy — switching away from, say, GatewayRedirect
+  // and back used to silently drop the device back to ExplicitProxy.
+  const [previousMode, setPreviousMode] = useState<ProxyMode>('ExplicitProxy')
+  useEffect(() => {
+    if (settings?.mode && settings.mode !== 'Passive') setPreviousMode(settings.mode)
+  }, [settings?.mode])
+
   // Mode toggle — proxy lifecycle (start/stop) stays in the header
   async function handleSetPassive(passive: boolean) {
     setModeLoading(true)
     setError(null)
     try {
-      await proxy.saveSettings({ mode: passive ? 'Passive' : 'ExplicitProxy' })
+      await proxy.saveSettings({ mode: passive ? 'Passive' : previousMode })
       if (!passive) setSummary(null)
     } catch {
       setError('Failed to switch mode.')
