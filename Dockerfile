@@ -26,9 +26,11 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 # SharpPcap / PacketDotNet require libpcap at runtime on Linux
 # Npgsql (PostgreSQL provider) loads the Kerberos GSSAPI library during connection negotiation
+# Gateway Redirect mode installs its iptables REDIRECT rules from inside the container (host networking + NET_ADMIN)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpcap0.8 \
         libgssapi-krb5-2 \
+        iptables \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

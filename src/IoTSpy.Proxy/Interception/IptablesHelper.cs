@@ -18,12 +18,22 @@ public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
     /// <summary>
     /// Installs iptables REDIRECT rules for the given destination ports.
     /// Traffic to these ports on the PREROUTING chain will be redirected to the transparent proxy port.
+    /// When <paramref name="inboundInterface"/> is set the rules only match traffic arriving on that
+    /// interface (for example the capture-side NIC of a gateway), so the host's other interfaces are
+    /// not affected. Rules that already exist are left alone, so a restart after an unclean exit does
+    /// not stack duplicates.
     /// </summary>
-    public async Task<bool> InstallRedirectRulesAsync(int transparentProxyPort, int[]? ports = null)
+    public async Task<bool> InstallRedirectRulesAsync(int transparentProxyPort, int[]? ports = null, string? inboundInterface = null)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             logger.LogWarning("iptables rules only supported on Linux");
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(inboundInterface) && !IsValidInterfaceName(inboundInterface))
+        {
+            logger.LogError("Refusing to install iptables rules: {Interface} is not a valid interface name", inboundInterface);
             return false;
         }
 
@@ -35,20 +45,40 @@ public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
 
         foreach (var port in ports)
         {
-            var args = $"-t nat -A PREROUTING -p tcp --dport {port} -j REDIRECT --to-port {transparentProxyPort}";
-            if (await RunCommandAsync("iptables", args))
+            var rule = BuildRedirectRule(port, transparentProxyPort, inboundInterface);
+            if (await RunCommandAsync("iptables", $"-t nat -C {rule}"))
             {
-                _activeRules.Add(args);
-                logger.LogInformation("iptables rule installed: {Args}", args);
+                // Already present (left over from an unclean exit). Track it so Remove still cleans it up.
+                _activeRules.Add(rule);
+                logger.LogInformation("iptables rule already present: {Rule}", rule);
+            }
+            else if (await RunCommandAsync("iptables", $"-t nat -A {rule}"))
+            {
+                _activeRules.Add(rule);
+                logger.LogInformation("iptables rule installed: {Rule}", rule);
             }
             else
             {
-                logger.LogError("Failed to install iptables rule: {Args}", args);
+                logger.LogError("Failed to install iptables rule: {Rule}", rule);
             }
         }
 
         return _activeRules.Count > 0;
     }
+
+    /// <summary>The rule body shared by -C, -A and -D, e.g. <c>PREROUTING -i eth1 -p tcp --dport 443 -j REDIRECT --to-port 9999</c>.</summary>
+    public static string BuildRedirectRule(int destinationPort, int proxyPort, string? inboundInterface = null)
+    {
+        var iface = string.IsNullOrWhiteSpace(inboundInterface) ? "" : $"-i {inboundInterface} ";
+        return $"PREROUTING {iface}-p tcp --dport {destinationPort} -j REDIRECT --to-port {proxyPort}";
+    }
+
+    /// <summary>
+    /// Linux interface names are at most 15 characters. The name is placed on an iptables command
+    /// line, so anything outside this conservative set is rejected.
+    /// </summary>
+    public static bool IsValidInterfaceName(string name) =>
+        name.Length is > 0 and <= 15 && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
     /// <summary>
     /// Removes all iptables REDIRECT rules that were installed by this helper.
@@ -57,8 +87,7 @@ public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
     {
         foreach (var rule in _activeRules)
         {
-            // Replace -A (append) with -D (delete) to remove the rule
-            var deleteArgs = rule.Replace("-A PREROUTING", "-D PREROUTING");
+            var deleteArgs = $"-t nat -D {rule}";
             if (await RunCommandAsync("iptables", deleteArgs))
                 logger.LogInformation("iptables rule removed: {Args}", deleteArgs);
             else

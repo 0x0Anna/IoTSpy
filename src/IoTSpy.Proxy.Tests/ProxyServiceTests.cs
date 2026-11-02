@@ -1,6 +1,7 @@
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using IoTSpy.Proxy;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -38,7 +39,7 @@ public class ProxyServiceTests
         // which is out of scope for these unit tests.
         var svc = new ProxyService(
             null!, null!, null!, null!,
-            scopeFactory, NullLogger<ProxyService>.Instance);
+            scopeFactory, new ConfigurationBuilder().Build(), NullLogger<ProxyService>.Instance);
 
         return (svc, settingsRepo);
     }
