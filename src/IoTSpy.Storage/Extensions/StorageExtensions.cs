@@ -24,6 +24,8 @@ public static class StorageExtensions
                 if (!npgsqlConnString.Contains("Maximum Pool Size", StringComparison.OrdinalIgnoreCase))
                     npgsqlConnString += $";Maximum Pool Size={maxPoolSize};Minimum Pool Size={minPoolSize}";
                 opts.UseNpgsql(npgsqlConnString);
+                // Postgres text columns reject NUL characters, which binary captured bodies contain.
+                opts.AddInterceptors(new PostgresTextSanitizerInterceptor());
             }
             else
             {
