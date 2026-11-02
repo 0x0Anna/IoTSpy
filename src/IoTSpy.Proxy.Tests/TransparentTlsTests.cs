@@ -44,6 +44,19 @@ public class TransparentTlsTests
         Assert.Equal(Fallback, TransparentTls.ResolveHostName(name, Fallback));
     }
 
+    [Theory]
+    [InlineData("203.0.113.7", "device.example.test", "device.example.test")]
+    [InlineData("203.0.113.7", "example.test:80", "example.test")]
+    [InlineData("203.0.113.7", "Example.TEST", "example.test")]
+    [InlineData("203.0.113.7", null, "203.0.113.7")]
+    [InlineData("203.0.113.7", "", "203.0.113.7")]
+    [InlineData("203.0.113.7", "192.0.2.5", "203.0.113.7")]            // IP literal, not a name
+    [InlineData("203.0.113.7", "evil.com, O=x", "203.0.113.7")]       // invalid name
+    [InlineData("203.0.113.7", "[::1]:80", "203.0.113.7")]
+    [InlineData("www.google.com", "other.example.com", "www.google.com")] // already a name: keep it
+    public void ResolveCaptureHost_UsesHostHeaderOnlyWhenDestinationIsAnIp(string connectHost, string? header, string expected)
+        => Assert.Equal(expected, TransparentTls.ResolveCaptureHost(connectHost, header));
+
     [Fact]
     public async Task Authenticate_ClientSendsSni_PresentsCertificateValidForThatName()
     {

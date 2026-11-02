@@ -30,6 +30,25 @@ public static class TransparentTls
     }
 
     /// <summary>
+    /// The host name to record for a request. When the connection was redirected to a bare IP (plain
+    /// HTTP has no SNI, and some TLS clients send none), the request's <c>Host:</c> header carries the
+    /// name the client really asked for, so use that for display and rule matching. The connection
+    /// itself is still made to <paramref name="connectHost"/>. The header is client-controlled, so it
+    /// is validated like an SNI name.
+    /// </summary>
+    public static string ResolveCaptureHost(string connectHost, string? hostHeader)
+    {
+        if (!System.Net.IPAddress.TryParse(connectHost, out _)) return connectHost; // already a name
+        if (string.IsNullOrWhiteSpace(hostHeader)) return connectHost;
+
+        var name = hostHeader.Trim();
+        if (name.StartsWith('[')) return connectHost; // IPv6 literal
+        var colon = name.LastIndexOf(':');
+        if (colon >= 0) name = name[..colon];
+        return ResolveHostName(name, connectHost);
+    }
+
+    /// <summary>
     /// Authenticates <paramref name="ssl"/> as a server, presenting a certificate for the SNI name
     /// the client sent (falling back to <paramref name="fallbackHost"/>). Returns the hostname used,
     /// which callers should use as the upstream target so the upstream TLS handshake validates

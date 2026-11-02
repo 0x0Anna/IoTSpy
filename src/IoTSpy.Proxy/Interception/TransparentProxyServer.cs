@@ -486,9 +486,11 @@ public class TransparentProxyServer(
 
             // Parse request and apply manipulation pipeline
             ParseRequestLine(reqLine, out var method, out var path, out var query);
+            // Plain HTTP carries no SNI, so `host` may be a bare IP: record the name from the Host header.
+            var captureHost = TransparentTls.ResolveCaptureHost(host, ExtractHeaderValue(reqHeaders, "Host"));
             var httpMsg = new HttpMessage
             {
-                Method = method, Host = host, Port = port, Path = path, Query = query, Scheme = scheme,
+                Method = method, Host = captureHost, Port = port, Path = path, Query = query, Scheme = scheme,
                 RequestLine = reqLine, RequestHeaders = reqHeaders, RequestBody = reqBody
             };
 
@@ -621,7 +623,7 @@ public class TransparentProxyServer(
                 DeviceId = device?.Id,
                 Method = method,
                 Scheme = scheme,
-                Host = host,
+                Host = captureHost,
                 Port = port,
                 Path = path,
                 Query = query,
