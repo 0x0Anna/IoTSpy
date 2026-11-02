@@ -54,10 +54,6 @@ public class TransparentProxyServer(
     public bool IsRunning => _listener is not null;
     public int ActiveConnections => _activeConnections;
 
-    // Linux netfilter constants for SO_ORIGINAL_DST
-    private const int SOL_IP = 0;
-    private const int SO_ORIGINAL_DST = 80;
-
     public async Task StartAsync(int port, string listenAddress, CancellationToken ct = default)
     {
         if (IsRunning) return;
@@ -122,9 +118,9 @@ public class TransparentProxyServer(
                 var clientIp = ((IPEndPoint?)client.Client.RemoteEndPoint)?.Address.ToString() ?? "unknown";
 
                 // Recover the original destination from the NAT table
-                if (!TryGetOriginalDestination(client.Client, out var destIp, out var destPort))
+                if (!OriginalDestination.TryGet(client.Client, out var destIp, out var destPort, out var odstError))
                 {
-                    logger.LogDebug("Could not recover original destination for client {ClientIp}", clientIp);
+                    logger.LogWarning("Could not recover original destination for client {ClientIp}: {Error}", clientIp, odstError);
                     return;
                 }
 
@@ -840,38 +836,6 @@ public class TransparentProxyServer(
             totalRead += read;
         }
         return totalRead;
-    }
-
-    // ── SO_ORIGINAL_DST (Linux netfilter) ────────────────────────────────────
-
-    /// <summary>
-    /// Recovers the original destination address from a connection redirected by
-    /// iptables REDIRECT. Only works on Linux with netfilter.
-    /// </summary>
-    private static bool TryGetOriginalDestination(Socket socket, out IPAddress ip, out int port)
-    {
-        ip = IPAddress.None;
-        port = 0;
-
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            return false;
-
-        try
-        {
-            // struct sockaddr_in = 16 bytes: family(2) + port(2) + addr(4) + zero(8)
-            var optval = new byte[16];
-            socket.GetSocketOption(SocketOptionLevel.IP, (SocketOptionName)SO_ORIGINAL_DST, optval);
-
-            // Port is bytes 2-3 in network byte order
-            port = (optval[2] << 8) | optval[3];
-            // IP is bytes 4-7
-            ip = new IPAddress(new ReadOnlySpan<byte>(optval, 4, 4));
-            return true;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
     }
 
     // ── Helpers (shared HTTP parsing logic) ──────────────────────────────────
