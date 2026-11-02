@@ -170,23 +170,17 @@ public class TransparentProxyServer(
         TcpClient client, string host, int port,
         string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct)
     {
-        var certEntry = await ca.GetOrCreateHostCertificateAsync(host, ct);
-        var rootCaEntry = await ca.GetOrCreateRootCaAsync(ct);
-        var certContext = BuildCertContext(certEntry, rootCaEntry);
-
         var clientStream = client.GetStream();
         using var sslClient = new SslStream(clientStream, leaveInnerStreamOpen: true);
-        await sslClient.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
-        {
-            ServerCertificateContext = certContext,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-            ClientCertificateRequired = false,
-            ApplicationProtocols = [SslApplicationProtocol.Http11]
-        }, ct);
+
+        // The redirect only tells us the destination IP. Issue the leaf certificate for the SNI
+        // name the client asked for (a certificate for an IP fails hostname validation on iOS and
+        // browsers), and connect upstream by that name so the upstream handshake validates too.
+        var targetHost = await TransparentTls.AuthenticateAsync(sslClient, host, ca, ct);
 
         // Upstream connections come from the shared pool (reused across every client
         // device, not just this one) rather than a dedicated connection opened per client.
-        await InterceptHttpStreamAsync(sslClient, host, port, isTls: true, "https",
+        await InterceptHttpStreamAsync(sslClient, targetHost, port, isTls: true, "https",
             sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
             clientIp, settings, scope, ct);
     }
@@ -1137,7 +1131,7 @@ public class TransparentProxyServer(
         }
     }
 
-    private static SslStreamCertificateContext BuildCertContext(CertificateEntry leaf, CertificateEntry rootCa)
+    internal static SslStreamCertificateContext BuildCertContext(CertificateEntry leaf, CertificateEntry rootCa)
     {
         using var ephemeral = X509Certificate2.CreateFromPem(leaf.CertificatePem, leaf.PrivateKeyPem);
         // No 'using' — SslStreamCertificateContext owns leafCert's lifetime.
