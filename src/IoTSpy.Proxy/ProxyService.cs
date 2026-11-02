@@ -2,6 +2,7 @@ using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using IoTSpy.Proxy.Interception;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,7 @@ public class ProxyService(
     IptablesHelper iptablesHelper,
     ArpSpoofEngine arpSpoofEngine,
     IServiceScopeFactory scopeFactory,
+    IConfiguration configuration,
     ILogger<ProxyService> logger) : IProxyService, IHostedService
 {
     private ProxySettings? _settings;
@@ -86,13 +88,13 @@ public class ProxyService(
 
             case ProxyMode.GatewayRedirect:
                 await transparentProxy.StartAsync(settings.TransparentProxyPort, settings.ListenAddress, ct);
-                await iptablesHelper.InstallRedirectRulesAsync(settings.TransparentProxyPort);
+                await iptablesHelper.InstallRedirectRulesAsync(settings.TransparentProxyPort, inboundInterface: RedirectInterface(settings));
                 logger.LogInformation("GatewayRedirect mode started on port {Port}", settings.TransparentProxyPort);
                 break;
 
             case ProxyMode.ArpSpoof:
                 await transparentProxy.StartAsync(settings.TransparentProxyPort, settings.ListenAddress, ct);
-                await iptablesHelper.InstallRedirectRulesAsync(settings.TransparentProxyPort);
+                await iptablesHelper.InstallRedirectRulesAsync(settings.TransparentProxyPort, inboundInterface: RedirectInterface(settings));
                 await arpSpoofEngine.StartAsync(
                     settings.TargetDeviceIp,
                     settings.GatewayIp,
@@ -107,6 +109,18 @@ public class ProxyService(
                 logger.LogInformation("Passive proxy started on port {Port} — observe-only mode", settings.ProxyPort);
                 break;
         }
+    }
+
+    /// <summary>
+    /// The interface redirect rules are limited to: the persisted <c>NetworkInterface</c> setting, or
+    /// the deployment-level <c>Proxy:RedirectInterface</c> (env <c>Proxy__RedirectInterface</c>) so a
+    /// gateway host can pin it without editing settings. Null means all interfaces.
+    /// </summary>
+    private string? RedirectInterface(ProxySettings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.NetworkInterface)) return settings.NetworkInterface;
+        var configured = configuration["Proxy:RedirectInterface"];
+        return string.IsNullOrWhiteSpace(configured) ? null : configured;
     }
 
     private async Task StopAllAsync()

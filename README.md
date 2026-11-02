@@ -208,6 +208,15 @@ GET http://localhost:5000/api/certificates/root-ca/download
 
 (No auth required — this endpoint is public so you can install the CA before logging in.)
 
+### Gateway Redirect (no proxy settings on the device)
+
+When IoTSpy runs on the gateway for a network segment (the devices' default route goes through the host), set the proxy mode to **Gateway Redirect**. Devices need no proxy configuration: IoTSpy installs `iptables` `REDIRECT` rules for TCP 80, 443, 1883 and 8883 to its transparent proxy (default port 9999), recovers each connection's original destination, and issues the TLS certificate for the SNI name the device asked for (falling back to the destination IP when the device sends no SNI).
+
+- Needs the host's forwarding and NAT to be set up, and the container (if any) run with `network_mode: host` and `NET_ADMIN`. The image includes `iptables`.
+- To limit the redirect to one interface (for example the capture-side NIC), set the proxy's `NetworkInterface` setting (`PUT /api/proxy/settings`), or `Proxy__RedirectInterface=eth1` in the environment. Without it the rules match every interface.
+- The rules are added when the proxy starts and removed when it stops, so they follow the persisted proxy mode and **auto-start** setting across reboots.
+- Connections that do not send SNI are intercepted by IP, so the device must trust the IoTSpy CA for the generated IP certificate to validate; devices that pin certificates cannot be intercepted.
+
 ---
 
 ## Configuration
