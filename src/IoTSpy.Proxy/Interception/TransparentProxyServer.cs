@@ -54,10 +54,6 @@ public class TransparentProxyServer(
     public bool IsRunning => _listener is not null;
     public int ActiveConnections => _activeConnections;
 
-    // Linux netfilter constants for SO_ORIGINAL_DST
-    private const int SOL_IP = 0;
-    private const int SO_ORIGINAL_DST = 80;
-
     public async Task StartAsync(int port, string listenAddress, CancellationToken ct = default)
     {
         if (IsRunning) return;
@@ -122,9 +118,9 @@ public class TransparentProxyServer(
                 var clientIp = ((IPEndPoint?)client.Client.RemoteEndPoint)?.Address.ToString() ?? "unknown";
 
                 // Recover the original destination from the NAT table
-                if (!TryGetOriginalDestination(client.Client, out var destIp, out var destPort))
+                if (!OriginalDestination.TryGet(client.Client, out var destIp, out var destPort, out var odstError))
                 {
-                    logger.LogDebug("Could not recover original destination for client {ClientIp}", clientIp);
+                    logger.LogWarning("Could not recover original destination for client {ClientIp}: {Error}", clientIp, odstError);
                     return;
                 }
 
@@ -174,23 +170,17 @@ public class TransparentProxyServer(
         TcpClient client, string host, int port,
         string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct)
     {
-        var certEntry = await ca.GetOrCreateHostCertificateAsync(host, ct);
-        var rootCaEntry = await ca.GetOrCreateRootCaAsync(ct);
-        var certContext = BuildCertContext(certEntry, rootCaEntry);
-
         var clientStream = client.GetStream();
         using var sslClient = new SslStream(clientStream, leaveInnerStreamOpen: true);
-        await sslClient.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
-        {
-            ServerCertificateContext = certContext,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-            ClientCertificateRequired = false,
-            ApplicationProtocols = [SslApplicationProtocol.Http11]
-        }, ct);
+
+        // The redirect only tells us the destination IP. Issue the leaf certificate for the SNI
+        // name the client asked for (a certificate for an IP fails hostname validation on iOS and
+        // browsers), and connect upstream by that name so the upstream handshake validates too.
+        var targetHost = await TransparentTls.AuthenticateAsync(sslClient, host, ca, ct);
 
         // Upstream connections come from the shared pool (reused across every client
         // device, not just this one) rather than a dedicated connection opened per client.
-        await InterceptHttpStreamAsync(sslClient, host, port, isTls: true, "https",
+        await InterceptHttpStreamAsync(sslClient, targetHost, port, isTls: true, "https",
             sslClient.SslProtocol.ToString(), sslClient.NegotiatedCipherSuite.ToString(),
             clientIp, settings, scope, ct);
     }
@@ -496,9 +486,11 @@ public class TransparentProxyServer(
 
             // Parse request and apply manipulation pipeline
             ParseRequestLine(reqLine, out var method, out var path, out var query);
+            // Plain HTTP carries no SNI, so `host` may be a bare IP: record the name from the Host header.
+            var captureHost = TransparentTls.ResolveCaptureHost(host, ExtractHeaderValue(reqHeaders, "Host"));
             var httpMsg = new HttpMessage
             {
-                Method = method, Host = host, Port = port, Path = path, Query = query, Scheme = scheme,
+                Method = method, Host = captureHost, Port = port, Path = path, Query = query, Scheme = scheme,
                 RequestLine = reqLine, RequestHeaders = reqHeaders, RequestBody = reqBody
             };
 
@@ -631,7 +623,7 @@ public class TransparentProxyServer(
                 DeviceId = device?.Id,
                 Method = method,
                 Scheme = scheme,
-                Host = host,
+                Host = captureHost,
                 Port = port,
                 Path = path,
                 Query = query,
@@ -840,38 +832,6 @@ public class TransparentProxyServer(
             totalRead += read;
         }
         return totalRead;
-    }
-
-    // ── SO_ORIGINAL_DST (Linux netfilter) ────────────────────────────────────
-
-    /// <summary>
-    /// Recovers the original destination address from a connection redirected by
-    /// iptables REDIRECT. Only works on Linux with netfilter.
-    /// </summary>
-    private static bool TryGetOriginalDestination(Socket socket, out IPAddress ip, out int port)
-    {
-        ip = IPAddress.None;
-        port = 0;
-
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            return false;
-
-        try
-        {
-            // struct sockaddr_in = 16 bytes: family(2) + port(2) + addr(4) + zero(8)
-            var optval = new byte[16];
-            socket.GetSocketOption(SocketOptionLevel.IP, (SocketOptionName)SO_ORIGINAL_DST, optval);
-
-            // Port is bytes 2-3 in network byte order
-            port = (optval[2] << 8) | optval[3];
-            // IP is bytes 4-7
-            ip = new IPAddress(new ReadOnlySpan<byte>(optval, 4, 4));
-            return true;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
     }
 
     // ── Helpers (shared HTTP parsing logic) ──────────────────────────────────
@@ -1173,7 +1133,7 @@ public class TransparentProxyServer(
         }
     }
 
-    private static SslStreamCertificateContext BuildCertContext(CertificateEntry leaf, CertificateEntry rootCa)
+    internal static SslStreamCertificateContext BuildCertContext(CertificateEntry leaf, CertificateEntry rootCa)
     {
         using var ephemeral = X509Certificate2.CreateFromPem(leaf.CertificatePem, leaf.PrivateKeyPem);
         // No 'using' — SslStreamCertificateContext owns leafCert's lifetime.
