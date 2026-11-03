@@ -63,12 +63,14 @@ Project-specific Claude Code skills live in `.claude/skills/` and are auto-disco
 | `/security-code-review` | Systematic security review across input handling, authz, resources, errors, crypto, secrets, and supply chain |
 | `/threat-modeling` | Structured threat modeling with calibrated severity and dual-use tool considerations |
 | `/iotspy-context` | IoTSpy-specific architecture, conventions, and security caveats — pair with the above when in this repo |
+| `/publish-hygiene` | Before every commit, push or PR: scan for details of the developer's own network/devices (this repo is public) |
 
 See `.claude/skills/README.md` for full details.
 
 ## Workflow rules
 
 - **Always run `dotnet test` before committing.** All backend tests must stay green.
+- **This repo is public. Run `/publish-hygiene` before every commit, push and PR** (`.claude/skills/publish-hygiene/scan.sh`). Test fixtures, comments, commit messages and PR descriptions must not carry lab IPs, interface names, device fingerprints, account IDs, infra names, or which real devices/vendors are on the network. Use RFC 5737 IPs and `example.com`-style placeholders.
 - New backend logic needs a corresponding test. Use NSubstitute for mocks; use EF Core SQLite in-memory for repository tests.
 - New EF entities require a migration (`dotnet ef migrations add ...`).
 - Keep `IoTSpy.Core` free of infrastructure dependencies.
