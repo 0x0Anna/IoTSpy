@@ -1331,6 +1331,9 @@ namespace IoTSpy.Storage.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AutoPassthroughOnTlsFailure")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("AutoStart")
                         .HasColumnType("INTEGER");
 
@@ -1390,6 +1393,10 @@ namespace IoTSpy.Storage.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("TargetDeviceIp")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TlsPassthroughHosts")
                         .IsRequired()
                         .HasColumnType("TEXT");
 

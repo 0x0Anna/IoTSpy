@@ -49,4 +49,20 @@ public class IptablesHelperTests
     [InlineData("$(id)")]
     public void IsValidInterfaceName_RejectsAnythingThatCouldAlterTheCommand(string name)
         => Assert.False(IptablesHelper.IsValidInterfaceName(name));
+
+    [Fact]
+    public void BuildQuicBlockRule_DropsUdp443FromCaptureInterface()
+    {
+        Assert.Equal(
+            "PREROUTING -i ens19 -p udp --dport 443 -j DROP",
+            IptablesHelper.BuildQuicBlockRule("ens19"));
+    }
+
+    [Fact]
+    public void InsertAtTop_AddsPositionAfterChain()
+    {
+        Assert.Equal(
+            "FORWARD 1 -i ens19 -j ACCEPT",
+            IptablesHelper.InsertAtTop("FORWARD -i ens19 -j ACCEPT"));
+    }
 }

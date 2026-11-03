@@ -29,6 +29,19 @@ public class ProxySettings
     public string CaCountry { get; set; } = "US";
     public int CaValidityYears { get; set; } = 10;
 
+    // ── TLS interception exceptions ──────────────────────────────────────
+    /// <summary>Hosts whose TLS is relayed untouched instead of intercepted — typically
+    /// certificate-pinned services. One pattern per line (commas also accepted): an exact host
+    /// (<c>api.example.com</c>) or a wildcard suffix (<c>*.apple.com</c>, which also matches
+    /// <c>apple.com</c>). Connections are still recorded as passthrough captures.</summary>
+    public string TlsPassthroughHosts { get; set; } = string.Empty;
+
+    /// <summary>When a client repeatedly rejects the interception certificate for a host
+    /// (pinning, or a device that doesn't trust the IoTSpy CA), relay that client+host untouched
+    /// for a while instead of breaking it. Off by default: it lets traffic through that is
+    /// currently failing, which can matter when a device is under investigation.</summary>
+    public bool AutoPassthroughOnTlsFailure { get; set; }
+
     // ── SSL stripping ────────────────────────────────────────────────────
     public bool SslStrip { get; set; }
 

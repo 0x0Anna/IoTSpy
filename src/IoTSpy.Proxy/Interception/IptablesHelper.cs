@@ -10,7 +10,8 @@ namespace IoTSpy.Proxy.Interception;
 /// </summary>
 public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
 {
-    private readonly List<string> _activeRules = [];
+    // (table, rule body) — rules live in different tables (nat REDIRECT, filter REJECT).
+    private readonly List<(string Table, string Rule)> _activeRules = [];
 
     /// <summary>Default ports to redirect through the transparent proxy.</summary>
     public static readonly int[] DefaultRedirectPorts = [80, 443, 1883, 8883];
@@ -45,26 +46,59 @@ public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
 
         foreach (var port in ports)
         {
-            var rule = BuildRedirectRule(port, transparentProxyPort, inboundInterface);
-            if (await RunCommandAsync("iptables", $"-t nat -C {rule}"))
-            {
-                // Already present (left over from an unclean exit). Track it so Remove still cleans it up.
-                _activeRules.Add(rule);
-                logger.LogInformation("iptables rule already present: {Rule}", rule);
-            }
-            else if (await RunCommandAsync("iptables", $"-t nat -A {rule}"))
-            {
-                _activeRules.Add(rule);
-                logger.LogInformation("iptables rule installed: {Rule}", rule);
-            }
-            else
-            {
-                logger.LogError("Failed to install iptables rule: {Rule}", rule);
-            }
+            await EnsureRuleAsync("nat", BuildRedirectRule(port, transparentProxyPort, inboundInterface), insert: false);
+        }
+
+        // QUIC (HTTP/3 over UDP 443) can't be redirected to a TCP proxy, so it would bypass
+        // interception entirely. Dropping it makes clients fall back to TCP/TLS (iOS and Chromium
+        // race QUIC against TCP anyway). Only when scoped to the capture NIC: unscoped, it would
+        // also block QUIC for everything else this host forwards (e.g. its own containers).
+        if (!string.IsNullOrWhiteSpace(inboundInterface))
+        {
+            // mangle PREROUTING, not filter FORWARD: filter rules are at the mercy of ordering —
+            // Docker re-inserts its DOCKER-USER jump at the top of FORWARD when it restarts, and
+            // gateway firewall scripts insert ACCEPTs into DOCKER-USER after this app has started,
+            // either of which would silently let QUIC through again. mangle runs before filter and
+            // nothing else manages it. (REJECT isn't allowed outside filter, hence DROP.)
+            await EnsureRuleAsync("mangle", BuildQuicBlockRule(inboundInterface), insert: false);
+        }
+        else
+        {
+            logger.LogInformation("QUIC (UDP 443) not blocked: no redirect interface configured, so it would affect all forwarded traffic");
         }
 
         return _activeRules.Count > 0;
     }
+
+    private async Task EnsureRuleAsync(string table, string rule, bool insert)
+    {
+        if (await RunCommandAsync("iptables", $"-t {table} -C {rule}"))
+        {
+            // Already present (left over from an unclean exit). Track it so Remove still cleans it up.
+            _activeRules.Add((table, rule));
+            logger.LogInformation("iptables rule already present: {Rule}", rule);
+        }
+        else if (await RunCommandAsync("iptables", insert ? $"-t {table} -I {InsertAtTop(rule)}" : $"-t {table} -A {rule}"))
+        {
+            _activeRules.Add((table, rule));
+            logger.LogInformation("iptables rule installed: {Rule}", rule);
+        }
+        else
+        {
+            logger.LogError("Failed to install iptables rule: {Rule}", rule);
+        }
+    }
+
+    /// <summary>"CHAIN rest..." → "CHAIN 1 rest..." for <c>iptables -I</c>.</summary>
+    internal static string InsertAtTop(string rule)
+    {
+        var space = rule.IndexOf(' ');
+        return space < 0 ? rule : $"{rule[..space]} 1{rule[space..]}";
+    }
+
+    /// <summary>mangle-table rule dropping QUIC (UDP 443) arriving on the capture interface.</summary>
+    public static string BuildQuicBlockRule(string inboundInterface) =>
+        $"PREROUTING -i {inboundInterface} -p udp --dport 443 -j DROP";
 
     /// <summary>The rule body shared by -C, -A and -D, e.g. <c>PREROUTING -i eth1 -p tcp --dport 443 -j REDIRECT --to-port 9999</c>.</summary>
     public static string BuildRedirectRule(int destinationPort, int proxyPort, string? inboundInterface = null)
@@ -85,9 +119,9 @@ public sealed class IptablesHelper(ILogger<IptablesHelper> logger)
     /// </summary>
     public async Task RemoveRedirectRulesAsync()
     {
-        foreach (var rule in _activeRules)
+        foreach (var (table, rule) in _activeRules)
         {
-            var deleteArgs = $"-t nat -D {rule}";
+            var deleteArgs = $"-t {table} -D {rule}";
             if (await RunCommandAsync("iptables", deleteArgs))
                 logger.LogInformation("iptables rule removed: {Args}", deleteArgs);
             else

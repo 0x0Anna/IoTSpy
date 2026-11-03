@@ -97,6 +97,9 @@ export interface ProxySettings {
   caOrganization: string
   caCountry: string
   caValidityYears: number
+  // TLS interception exceptions
+  tlsPassthroughHosts: string
+  autoPassthroughOnTlsFailure: boolean
 }
 
 export interface CertificateEntry {
@@ -302,6 +305,8 @@ export interface ProxySettingsUpdate {
   caOrganization?: string
   caCountry?: string
   caValidityYears?: number
+  tlsPassthroughHosts?: string
+  autoPassthroughOnTlsFailure?: boolean
 }
 
 // ── Filter params ─────────────────────────────────────────────────────────────

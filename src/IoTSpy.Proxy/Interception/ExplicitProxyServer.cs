@@ -546,16 +546,28 @@ public class ExplicitProxyServer(
             sw.Stop();
 
             // Forward response to client
+            // A client that hangs up mid-response (an app cancelling a download) makes this write
+            // throw. Previously that skipped recording entirely — the exchange happened upstream, so
+            // record it, then end the connection.
+            var clientAborted = false;
             if (statusLine2 is not null)
             {
-                if (httpMsg.ResponseBodySource is { } bodySrc)
+                try
                 {
-                    await WriteHttpHeadAsync(clientStream, statusLine2, respHeaders2, ct);
-                    await bodySrc.WriteToAsync(clientStream, ct);
+                    if (httpMsg.ResponseBodySource is { } bodySrc)
+                    {
+                        await WriteHttpHeadAsync(clientStream, statusLine2, respHeaders2, ct);
+                        await bodySrc.WriteToAsync(clientStream, ct);
+                    }
+                    else
+                    {
+                        await WriteHttpMessageAsync(clientStream, statusLine2, respHeaders2, respBodyBytes2, ct);
+                    }
                 }
-                else
+                catch (IOException) when (!ct.IsCancellationRequested)
                 {
-                    await WriteHttpMessageAsync(clientStream, statusLine2, respHeaders2, respBodyBytes2, ct);
+                    clientAborted = true;
+                    logger.LogDebug("Client {ClientIp} closed before the response from {Host}{Path} was delivered", clientIp, host, path);
                 }
             }
 
@@ -642,7 +654,8 @@ public class ExplicitProxyServer(
             }
 
             // HTTP/1.0 or Connection: close — stop after one exchange
-            if (respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
+            if (clientAborted ||
+                respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
             }
