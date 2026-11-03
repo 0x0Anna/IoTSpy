@@ -167,4 +167,55 @@ public class ManipulationServiceTests
         Assert.True(modified);
         Assert.Contains("X-Test: 1", message.RequestHeaders);
     }
+
+    // ── Connection-level Drop rules (TLS passthrough / failed handshakes) ────
+
+    private static ManipulationRule DropRule(string name, string? host = null, string? method = null, string? path = null,
+        ManipulationPhase phase = ManipulationPhase.Request, ManipulationRuleAction action = ManipulationRuleAction.Drop) =>
+        new() { Name = name, HostPattern = host, MethodPattern = method, PathPattern = path, Phase = phase, Action = action };
+
+    [Theory]
+    [InlineData(@"telemetry\.example\.net", null, null)]
+    [InlineData("telemetry", "CONNECT", null)]
+    [InlineData("telemetry", null, "^/$")]
+    public async Task FindConnectionDropRuleAsync_MatchingDropRule_ReturnsIt(string host, string? method, string? path)
+    {
+        var rule = DropRule("block telemetry", host, method, path);
+        var svc = MakeService(MakeRuleCache(rule), MakeBreakpointRepo(), Substitute.For<IAlertingService>());
+
+        var found = await svc.FindConnectionDropRuleAsync("telemetry.example.net", 443, TestContext.Current.CancellationToken);
+
+        Assert.Same(rule, found);
+    }
+
+    [Fact]
+    public async Task FindConnectionDropRuleAsync_IgnoresRulesThatCannotMatchAConnection()
+    {
+        var svc = MakeService(MakeRuleCache(
+                DropRule("other host", host: "example.com"),
+                DropRule("GET only", host: "telemetry", method: "^GET$"),
+                DropRule("api path", host: "telemetry", path: "^/api"),
+                DropRule("response phase", host: "telemetry", phase: ManipulationPhase.Response),
+                DropRule("not a drop", host: "telemetry", action: ManipulationRuleAction.ModifyHeader),
+                new ManipulationRule { Name = "chained", HostPattern = "telemetry", Action = ManipulationRuleAction.Drop, ParentRuleId = Guid.NewGuid() }),
+            MakeBreakpointRepo(), Substitute.For<IAlertingService>());
+
+        var found = await svc.FindConnectionDropRuleAsync("telemetry.example.net", 443, TestContext.Current.CancellationToken);
+
+        Assert.Null(found);
+    }
+
+    [Fact]
+    public async Task FindConnectionDropRuleAsync_AlertOnMatch_SendsAlert()
+    {
+        var rule = DropRule("block telemetry", host: "telemetry");
+        rule.AlertOnMatch = true;
+        var alerting = Substitute.For<IAlertingService>();
+        var svc = MakeService(MakeRuleCache(rule), MakeBreakpointRepo(), alerting);
+
+        await svc.FindConnectionDropRuleAsync("telemetry.example.net", 443, TestContext.Current.CancellationToken);
+
+        await alerting.Received(1).SendAlertAsync(
+            Arg.Is<string>(t => t.Contains("block telemetry")), Arg.Any<string>(), Arg.Any<AlertSeverity>(), Arg.Any<CancellationToken>());
+    }
 }

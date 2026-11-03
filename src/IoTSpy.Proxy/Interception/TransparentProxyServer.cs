@@ -157,6 +157,15 @@ public class TransparentProxyServer(
                     ClientHelloInfo? hello = TlsClientHelloParser.TryParse(helloBuf.AsSpan(0, helloLen), out var parsed) ? parsed : null;
                     var sniHost = TransparentTls.ResolveHostName(hello?.SniHostname, host);
 
+                    // A Drop rule matching the connection (CONNECT sni:port) closes it before any
+                    // handshake — the only way to block traffic the HTTP pipeline never sees
+                    // (passthrough, or a client that rejects the interception certificate).
+                    if (await manipulationService.FindConnectionDropRuleAsync(sniHost, destPort, ct) is { } dropRule)
+                    {
+                        await RecordDroppedConnectionAsync(clientIp, sniHost, destPort, hello, dropRule, scope, ct);
+                        return;
+                    }
+
                     var verdict = settings.CaptureTls
                         ? tlsPolicy.Decide(hello, sniHost, clientIp, settings)
                         : TlsInterceptionVerdict.Bypass(string.Empty);
@@ -299,17 +308,7 @@ public class TransparentProxyServer(
                 Protocol = InterceptionProtocol.TlsPassthrough,
                 Timestamp = DateTimeOffset.UtcNow,
                 ClientIp = clientIp,
-                TlsMetadataJson = JsonSerializer.Serialize(new TlsMetadata
-                {
-                    SniHostname = hello?.SniHostname ?? string.Empty,
-                    Ja3Hash = hello?.Ja3Hash ?? string.Empty,
-                    Ja3Raw = hello?.Ja3Raw ?? string.Empty,
-                    ClientTlsVersion = hello?.TlsVersion ?? 0,
-                    ClientCipherSuites = hello?.CipherSuites ?? [],
-                    ClientExtensions = hello?.Extensions ?? [],
-                    ClientAlpnProtocols = hello?.AlpnProtocols ?? [],
-                    PassthroughReason = $"interception failed: {reason}"
-                })
+                TlsMetadataJson = JsonSerializer.Serialize(HelloMetadata(hello, $"interception failed: {reason}"))
             };
             await captures.AddAsync(capture, ct);
             await publisher.PublishAsync(capture, ct);
@@ -319,6 +318,67 @@ public class TransparentProxyServer(
             logger.LogWarning(recordEx, "Failed to record TLS handshake failure for {SniHost}", sniHost);
         }
     }
+
+    private async Task RecordDroppedConnectionAsync(
+        string clientIp, string sniHost, int port, ClientHelloInfo? hello, ManipulationRule rule,
+        IServiceScope scope, CancellationToken ct)
+    {
+        var (group, isFirst) = passthroughCoalescer.Join(clientIp, sniHost, port, PassthroughCaptureCoalescer.Dropped);
+        logger.Log(isFirst ? LogLevel.Information : LogLevel.Debug,
+            "TLS connection dropped by rule '{RuleName}': {ClientIp}→{SniHost}:{Port}", rule.Name, clientIp, sniHost, port);
+
+        var metadata = HelloMetadata(hello, $"dropped by rule '{rule.Name}'");
+        try
+        {
+            if (isFirst)
+            {
+                var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+                var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+                var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+                var capture = new CapturedRequest
+                {
+                    DeviceId = device?.Id,
+                    Method = "CONNECT",
+                    Scheme = "tls-dropped",
+                    Host = sniHost,
+                    Port = port,
+                    Path = "/",
+                    IsTls = true,
+                    StatusMessage = $"Dropped by rule '{rule.Name}'",
+                    Protocol = InterceptionProtocol.TlsPassthrough,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    ClientIp = clientIp,
+                    TlsMetadataJson = JsonSerializer.Serialize(metadata)
+                };
+                await captures.AddAsync(capture, ct);
+                await publisher.PublishAsync(capture, ct);
+                group.Recorded(capture.Id, capture.StatusMessage, metadata);
+            }
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to record dropped connection to {SniHost}", sniHost);
+        }
+        finally
+        {
+            if (isFirst && group.CaptureId is null) group.Abandon();
+        }
+
+        // Later drops in the window only bump the row's connection count.
+        if (!isFirst) await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
+    }
+
+    private static TlsMetadata HelloMetadata(ClientHelloInfo? hello, string reason) => new()
+    {
+        SniHostname = hello?.SniHostname ?? string.Empty,
+        Ja3Hash = hello?.Ja3Hash ?? string.Empty,
+        Ja3Raw = hello?.Ja3Raw ?? string.Empty,
+        ClientTlsVersion = hello?.TlsVersion ?? 0,
+        ClientCipherSuites = hello?.CipherSuites ?? [],
+        ClientExtensions = hello?.Extensions ?? [],
+        ClientAlpnProtocols = hello?.AlpnProtocols ?? [],
+        PassthroughReason = reason
+    };
 
     /// <summary>Innermost message is usually the useful one, e.g. "Received fatal alert: UnknownCA".</summary>
     internal static string DescribeHandshakeFailure(Exception ex)

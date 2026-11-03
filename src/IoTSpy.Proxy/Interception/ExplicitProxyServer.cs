@@ -173,6 +173,14 @@ public class ExplicitProxyServer(
             if (string.IsNullOrEmpty(line)) break;
         }
 
+        // A Drop rule matching the tunnel itself (CONNECT host:port) refuses it outright.
+        if (await manipulationService.FindConnectionDropRuleAsync(host, port, ct) is { } dropRule)
+        {
+            logger.LogDebug("CONNECT {ClientIp}→{Host}:{Port} dropped by rule '{RuleName}'", clientIp, host, port, dropRule.Name);
+            await clientStream.WriteAsync("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray(), ct);
+            return;
+        }
+
         // Respond 200 Connection established
         var ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
         await clientStream.WriteAsync(ok, ct);

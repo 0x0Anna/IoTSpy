@@ -44,6 +44,15 @@ public class RulesEngine(ILogger<RulesEngine> logger)
         return modified;
     }
 
+    /// <summary>
+    /// First request-phase Drop rule (in priority order) matching a connection described as a
+    /// CONNECT message. Chained rules never match here: no other rule has run on the connection.
+    /// </summary>
+    internal static ManipulationRule? FindConnectionDropRule(IReadOnlyList<ManipulationRule> rules, HttpMessage connection) =>
+        rules.FirstOrDefault(r => r.Phase == ManipulationPhase.Request
+                                  && r.Action == ManipulationRuleAction.Drop
+                                  && Matches(r, connection));
+
     internal static bool Matches(ManipulationRule rule, HttpMessage message)
     {
         // Chained rule: only fires when its parent already matched this exchange.

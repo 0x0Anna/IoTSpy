@@ -17,10 +17,13 @@ namespace IoTSpy.Proxy.Interception;
 /// </summary>
 public sealed class PassthroughCaptureCoalescer(TimeProvider time)
 {
+    public const string Passthrough = "passthrough";
+    public const string Dropped = "dropped";
+
     internal static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
     private const int MaxTrackedGroups = 10_000;
 
-    private readonly ConcurrentDictionary<(string Client, string Host, int Port), Group> _groups = new();
+    private readonly ConcurrentDictionary<(string Kind, string Client, string Host, int Port), Group> _groups = new();
 
     /// <summary>The passthrough connections of one client+host+port inside one window.</summary>
     public sealed class Group
@@ -107,14 +110,15 @@ public sealed class PassthroughCaptureCoalescer(TimeProvider time)
     /// <summary>
     /// Registers a new passthrough connection. <c>IsFirst</c> is true when it opens a new group —
     /// the caller then records the capture row (and logs at Information); later connections in the
-    /// window only add their traffic to that row.
+    /// window only add their traffic to that row. <paramref name="kind"/> keeps differently handled
+    /// connections to the same host (relayed vs. dropped by a rule) in separate rows.
     /// </summary>
-    public (Group Group, bool IsFirst) Join(string clientIp, string host, int port)
+    public (Group Group, bool IsFirst) Join(string clientIp, string host, int port, string kind = Passthrough)
     {
         var now = time.GetUtcNow();
         if (_groups.Count >= MaxTrackedGroups) Prune(now);
 
-        var key = (clientIp, host.Trim().TrimEnd('.').ToLowerInvariant(), port);
+        var key = (kind, clientIp, host.Trim().TrimEnd('.').ToLowerInvariant(), port);
         while (true)
         {
             if (_groups.TryGetValue(key, out var existing) && !existing.Abandoned && now - existing.WindowStart < Window)
@@ -135,7 +139,7 @@ public sealed class PassthroughCaptureCoalescer(TimeProvider time)
     {
         foreach (var (key, group) in _groups)
             if (group.Abandoned || now - group.WindowStart >= Window)
-                _groups.TryRemove(new KeyValuePair<(string, string, int), Group>(key, group));
+                _groups.TryRemove(new KeyValuePair<(string, string, string, int), Group>(key, group));
     }
 }
 

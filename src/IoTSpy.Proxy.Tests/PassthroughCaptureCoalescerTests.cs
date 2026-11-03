@@ -104,4 +104,14 @@ public class PassthroughCaptureCoalescerTests
         Assert.Equal("0123456789abcdef0123456789abcdef", row.Metadata.Ja3Hash);
         Assert.Equal(0, row.Metadata.ClientToServerBytes);
     }
+
+    [Fact]
+    public void DroppedAndPassedThroughConnections_GetSeparateGroups()
+    {
+        var c = new PassthroughCaptureCoalescer(new FakeTimeProvider());
+        c.Join(DeviceIp, Telemetry, 443);
+
+        Assert.True(c.Join(DeviceIp, Telemetry, 443, PassthroughCaptureCoalescer.Dropped).IsFirst);
+        Assert.False(c.Join(DeviceIp, Telemetry, 443, PassthroughCaptureCoalescer.Dropped).IsFirst);
+    }
 }
