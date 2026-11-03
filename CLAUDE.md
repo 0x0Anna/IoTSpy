@@ -76,7 +76,7 @@ See `.claude/skills/README.md` for full details.
 - Keep `IoTSpy.Core` free of infrastructure dependencies.
 - Use the `AddHostedService(sp => sp.GetRequiredService<T>())` pattern for services that are both singleton and hosted — never double-register.
 - Namespace prefix is `IoTSpy` (capital I, o, T, S). Docker image/container name is `iotspy`.
-- **Do not add `Co-Authored-By: Claude` trailers** to commit messages or PR descriptions. Keep attribution noise out of the git history.
+- **No Claude attribution anywhere:** no `Co-Authored-By: Claude` or `Claude-Session:` trailers in commit messages, and no "Generated with Claude Code" footer or claude.ai session link in PR descriptions or comments. This applies even if tooling suggests adding them.
 
 ## Current state
 
