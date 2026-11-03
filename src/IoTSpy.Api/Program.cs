@@ -191,6 +191,7 @@ if (!redisOptions.IsConfigured)
     builder.Services.AddSingleton<IPassiveProxyBuffer, IoTSpy.Proxy.Passive.PassiveProxyBuffer>();
 builder.Services.AddSingleton<ExplicitProxyServer>();
 builder.Services.AddSingleton(_ => new TlsInterceptionPolicy(TimeProvider.System));
+builder.Services.AddSingleton(_ => new PassthroughCaptureCoalescer(TimeProvider.System));
 builder.Services.AddSingleton<TransparentProxyServer>();
 builder.Services.AddSingleton<IptablesHelper>();
 builder.Services.AddSingleton<IWindowsFirewallHelper, WindowsFirewallHelper>();

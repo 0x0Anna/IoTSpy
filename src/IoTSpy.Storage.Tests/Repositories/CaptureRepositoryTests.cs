@@ -217,4 +217,25 @@ public class CaptureRepositoryTests : IDisposable
         Assert.Equal(2, results.Count);
         Assert.Equal(2, await repo.CountAsync(new CaptureFilter(BodySearch: "sk-secret-token"), TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task UpdateTrafficStatsAsync_OverwritesOnlyTrafficFields()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var repo = new CaptureRepository(_db);
+        var capture = await repo.AddAsync(MakeCapture("telemetry.example.net", "CONNECT", 0), ct);
+
+        await repo.UpdateTrafficStatsAsync(capture.Id, 7250, 9100, 10500,
+            "passthrough: auto (2 connections)", "{\"ConnectionCount\":2}", ct);
+
+        var loaded = await repo.GetByIdAsync(capture.Id, ct);
+        Assert.NotNull(loaded);
+        Assert.Equal(7250, loaded.DurationMs);
+        Assert.Equal(9100, loaded.RequestBodySize);
+        Assert.Equal(10500, loaded.ResponseBodySize);
+        Assert.Equal("passthrough: auto (2 connections)", loaded.StatusMessage);
+        Assert.Equal("{\"ConnectionCount\":2}", loaded.TlsMetadataJson);
+        Assert.Equal("telemetry.example.net", loaded.Host);
+        Assert.Equal("CONNECT", loaded.Method);
+    }
 }
