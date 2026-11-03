@@ -61,6 +61,18 @@ public class TlsInterceptionPolicyTests
         Assert.False(verdict.Passthrough);
     }
 
+    // ── Non-TLS detection ────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("160301", true)]               // TLS 1.0 record version (normal ClientHello)
+    [InlineData("160303", true)]
+    [InlineData("43424b505052", false)]         // "CBKPPR…" — Ademco/Resideo gateway on 443
+    [InlineData("474554202f", false)]           // "GET /" — plain HTTP on a TLS port
+    [InlineData("16", false)]                   // too short to tell
+    [InlineData("", false)]
+    public void LooksLikeTlsHandshake(string hex, bool expected) =>
+        Assert.Equal(expected, TransparentProxyServer.LooksLikeTlsHandshake(Convert.FromHexString(hex)));
+
     // ── Bypass list ──────────────────────────────────────────────────────────
 
     [Theory]
