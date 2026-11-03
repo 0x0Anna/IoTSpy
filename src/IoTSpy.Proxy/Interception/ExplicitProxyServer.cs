@@ -522,7 +522,8 @@ public class ExplicitProxyServer(
                     {
                         respBody2 = httpMsg.ResponseBody;
                         respBodyBytes2 = Encoding.UTF8.GetBytes(respBody2);
-                        respHeaders2 = UpdateContentLength(respHeaders2, respBodyBytes2.Length);
+                        respHeaders2 = UpdateContentLength(respHeaders2, respBodyBytes2.Length,
+                            emitZero: !IsBodylessStatus(statusLine2) && !string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase));
                     }
                     else
                     {
@@ -1280,12 +1281,17 @@ public class ExplicitProxyServer(
         return string.Join("\r\n", lines);
     }
 
-    private static string UpdateContentLength(string headers, int byteCount)
+    /// <param name="emitZero">When true, writes <c>Content-Length: 0</c> for an empty body
+    /// instead of omitting the header. Required for modified responses: without a length (or
+    /// chunked framing) a response body is close-delimited (RFC 9112 §6.3), so a keep-alive
+    /// client waits for a body that never comes. Requests keep the old behaviour — an absent
+    /// Content-Length already means "no body" there.</param>
+    internal static string UpdateContentLength(string headers, int byteCount, bool emitZero = false)
     {
         var lines = headers.Split("\r\n")
             .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        if (byteCount > 0)
+        if (byteCount > 0 || emitZero)
             lines.Add($"Content-Length: {byteCount}");
         return string.Join("\r\n", lines);
     }
