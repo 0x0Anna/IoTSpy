@@ -18,13 +18,17 @@ public class ManipulationControllerTests
         IBreakpointRepository? breakpoints = null,
         IManipulationService? manipService = null,
         IAuditRepository? audit = null,
-        ICaptureRepository? captures = null)
+        ICaptureRepository? captures = null,
+        IReplaySessionRepository? replays = null)
     {
         var r = rules ?? Substitute.For<IManipulationRuleRepository>();
         var bp = breakpoints ?? Substitute.For<IBreakpointRepository>();
-        var rs = Substitute.For<IReplaySessionRepository>();
-        rs.GetAllAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new List<ReplaySession>());
-        rs.CountAsync(Arg.Any<CancellationToken>()).Returns(0);
+        var rs = replays ?? Substitute.For<IReplaySessionRepository>();
+        if (replays is null)
+        {
+            rs.GetAllAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new List<ReplaySession>());
+            rs.CountAsync(Arg.Any<CancellationToken>()).Returns(0);
+        }
         var fj = Substitute.For<IFuzzerJobRepository>();
         fj.GetAllAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<FuzzerJobStatus?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>()).Returns(new List<FuzzerJob>());
         fj.CountAsync(Arg.Any<FuzzerJobStatus?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>()).Returns(0);
@@ -636,5 +640,38 @@ public class ManipulationControllerTests
         Assert.NotEqual(originalParentId, parent.Id);
         Assert.Equal(parent.Id, child.ParentRuleId);
         Assert.Null(orphan.ParentRuleId);
+    }
+
+    // ── Replays: no overlapping repository calls (#116) ──────────────────────
+
+    /// <summary>
+    /// Repositories share one request-scoped DbContext, which rejects concurrent operations
+    /// ("A second operation was started on this context instance…"). ListReplays started its
+    /// page and count queries together, which failed intermittently against Postgres. SQLite's
+    /// async methods complete synchronously, so a real-database test can't reproduce it; this
+    /// keeps the first call pending and fails if a second starts before it completes.
+    /// </summary>
+    [Fact]
+    public async Task ListReplays_DoesNotStartCountBeforePageQueryCompletes()
+    {
+        var pageQuery = new TaskCompletionSource<List<ReplaySession>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var overlapped = false;
+        var replays = Substitute.For<IReplaySessionRepository>();
+        replays.GetAllAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(pageQuery.Task);
+        replays.CountAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            overlapped |= !pageQuery.Task.IsCompleted;
+            return Task.FromResult(3);
+        });
+
+        var call = MakeController(replays: replays).ListReplays(1, 20, TestContext.Current.CancellationToken);
+        pageQuery.SetResult([new ReplaySession(), new ReplaySession(), new ReplaySession()]);
+        var result = await call as OkObjectResult;
+
+        Assert.False(overlapped, "CountAsync started while GetAllAsync was still running");
+        Assert.NotNull(result);
+        var json = JsonSerializer.SerializeToElement(result!.Value);
+        Assert.Equal(3, json.GetProperty("total").GetInt32());
+        Assert.Equal(3, json.GetProperty("items").GetArrayLength());
     }
 }
