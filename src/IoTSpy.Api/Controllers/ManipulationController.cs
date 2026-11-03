@@ -311,10 +311,10 @@ public class ManipulationController(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
         pageSize = Math.Clamp(pageSize, 1, 200);
-        var itemsTask = replaySessions.GetAllAsync(page, pageSize, ct);
-        var totalTask = replaySessions.CountAsync(ct);
-        var items = await itemsTask;
-        var total = await totalTask;
+        // Sequential, not concurrent: both queries go through the same request-scoped DbContext,
+        // which rejects overlapping operations (#116).
+        var items = await replaySessions.GetAllAsync(page, pageSize, ct);
+        var total = await replaySessions.CountAsync(ct);
         return Ok(new { items, total, page, pageSize, pages = (int)Math.Ceiling(total / (double)pageSize) });
     }
 
