@@ -84,4 +84,33 @@ public class ProxyControllerTests
         Assert.NotNull(result);
         await proxy.Received(1).UpdateSettingsAsync(Arg.Any<ProxySettings>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task UpdateSettings_SetsTlsPassthroughOptions()
+    {
+        var proxy = CreateProxyService();
+        ProxySettings? saved = null;
+        proxy.UpdateSettingsAsync(Arg.Do<ProxySettings>(s => saved = s), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var controller = new ProxyController(proxy);
+
+        var dto = new UpdateProxySettingsDto(TlsPassthroughHosts: "  *.apple.com\ngateway.icloud.com  ", AutoPassthroughOnTlsFailure: true);
+        await controller.UpdateSettings(dto, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(saved);
+        Assert.Equal("*.apple.com\ngateway.icloud.com", saved!.TlsPassthroughHosts);
+        Assert.True(saved.AutoPassthroughOnTlsFailure);
+    }
+
+    [Fact]
+    public async Task UpdateSettings_TooLongPassthroughList_Returns400()
+    {
+        var proxy = CreateProxyService();
+        var controller = new ProxyController(proxy);
+
+        var result = await controller.UpdateSettings(
+            new UpdateProxySettingsDto(TlsPassthroughHosts: new string('a', 16_385)), TestContext.Current.CancellationToken);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        await proxy.DidNotReceive().UpdateSettingsAsync(Arg.Any<ProxySettings>(), Arg.Any<CancellationToken>());
+    }
 }

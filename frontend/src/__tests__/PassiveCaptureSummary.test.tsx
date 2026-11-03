@@ -62,6 +62,8 @@ function statusWith(mode: ProxyStatus['settings']['mode']): ProxyStatus {
       caValidityYears: 10,
       autoStart: true,
       passwordHash: '',
+      tlsPassthroughHosts: '',
+      autoPassthroughOnTlsFailure: false,
     },
   }
 }

@@ -114,6 +114,17 @@
   cursor: not-allowed;
 }
 
+.settings-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-faint);
+}
+
+textarea.settings-input {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  resize: vertical;
+}
+
 .settings-checkbox-row {
   display: flex;
   align-items: center;

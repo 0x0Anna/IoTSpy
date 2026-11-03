@@ -44,6 +44,7 @@ public class TransparentProxyServer(
     IPerHostConnectPipelineCache perHostPipelines,
     IUpstreamConnectionPool connectionPool,
     IProtocolMessageWriter protocolMessageWriter,
+    TlsInterceptionPolicy tlsPolicy,
     ILogger<TransparentProxyServer> logger)
 {
     private TcpListener? _listener;
@@ -134,10 +135,33 @@ public class TransparentProxyServer(
                 // Determine if this is TLS traffic (common TLS ports: 443, 8443, 8883)
                 var isTlsPort = destPort is 443 or 8443 or 8883;
 
-                if (isTlsPort && settings.CaptureTls)
-                    await HandleTlsTransparentAsync(client, host, destPort, clientIp, settings, scope, ct);
-                else if (isTlsPort)
-                    await HandleTlsPassthroughAsync(client, host, destPort, clientIp, scope, ct);
+                if (isTlsPort)
+                {
+                    // Read the ClientHello before choosing how to handle the connection: SNI and
+                    // ALPN decide whether the MITM can serve this client at all (see TlsInterceptionPolicy).
+                    var (helloBuf, helloLen) = await ReadClientHelloAsync(client.GetStream(), ct);
+                    if (helloLen == 0) return;
+                    ClientHelloInfo? hello = TlsClientHelloParser.TryParse(helloBuf.AsSpan(0, helloLen), out var parsed) ? parsed : null;
+                    var sniHost = TransparentTls.ResolveHostName(hello?.SniHostname, host);
+
+                    var verdict = settings.CaptureTls
+                        ? tlsPolicy.Decide(hello, sniHost, clientIp, settings)
+                        : TlsInterceptionVerdict.Bypass(string.Empty);
+
+                    if (verdict.Passthrough)
+                    {
+                        if (verdict.Reason.Length > 0)
+                            logger.LogInformation("TLS passthrough {ClientIp}→{SniHost}:{Port} — {Reason}",
+                                clientIp, sniHost, destPort, verdict.Reason);
+                        await HandleTlsPassthroughAsync(client, host, destPort, clientIp, scope, ct,
+                            helloBuf, helloLen, hello, verdict.Reason);
+                    }
+                    else
+                    {
+                        await HandleTlsTransparentAsync(client, host, destPort, clientIp, settings, scope, ct,
+                            helloBuf, helloLen, hello, sniHost);
+                    }
+                }
                 else
                     await HandlePlainTransparentAsync(client, host, destPort, clientIp, settings, scope, ct);
             }
@@ -168,15 +192,30 @@ public class TransparentProxyServer(
 
     private async Task HandleTlsTransparentAsync(
         TcpClient client, string host, int port,
-        string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct)
+        string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct,
+        byte[] helloBuf, int helloLen, ClientHelloInfo? hello, string sniHost)
     {
         var clientStream = client.GetStream();
-        using var sslClient = new SslStream(clientStream, leaveInnerStreamOpen: true);
+        // The ClientHello was already read off the socket to make the passthrough decision;
+        // replay it so SslStream sees the handshake from the start.
+        using var sslClient = new SslStream(new PrefixedStream(helloBuf.AsMemory(0, helloLen), clientStream), leaveInnerStreamOpen: true);
 
         // The redirect only tells us the destination IP. Issue the leaf certificate for the SNI
         // name the client asked for (a certificate for an IP fails hostname validation on iOS and
         // browsers), and connect upstream by that name so the upstream handshake validates too.
-        var targetHost = await TransparentTls.AuthenticateAsync(sslClient, host, ca, ct);
+        string targetHost;
+        try
+        {
+            targetHost = await TransparentTls.AuthenticateAsync(sslClient, host, ca, ct);
+        }
+        catch (Exception ex) when (ex is AuthenticationException or IOException && !ct.IsCancellationRequested)
+        {
+            // The client rejected our certificate (pinning / untrusted CA) or aborted the handshake.
+            // Previously this vanished at Debug level with no capture — make it visible.
+            await RecordHandshakeFailureAsync(clientIp, sniHost, port, hello, ex, settings, scope, ct);
+            return;
+        }
+        tlsPolicy.RecordHandshakeSuccess(clientIp, targetHost);
 
         // Upstream connections come from the shared pool (reused across every client
         // device, not just this one) rather than a dedicated connection opened per client.
@@ -199,49 +238,122 @@ public class TransparentProxyServer(
             string.Empty, string.Empty, clientIp, settings, scope, ct);
     }
 
+    private async Task RecordHandshakeFailureAsync(
+        string clientIp, string sniHost, int port, ClientHelloInfo? hello, Exception ex,
+        ProxySettings settings, IServiceScope scope, CancellationToken ct)
+    {
+        var shouldRecord = tlsPolicy.RecordHandshakeFailure(clientIp, sniHost);
+        var reason = DescribeHandshakeFailure(ex);
+        if (!shouldRecord)
+        {
+            logger.LogDebug("TLS interception failed again for {ClientIp}→{SniHost}: {Reason}", clientIp, sniHost, reason);
+            return;
+        }
+
+        var hint = settings.AutoPassthroughOnTlsFailure
+            ? $"it will be relayed untouched after {TlsInterceptionPolicy.FailureThreshold} failures"
+            : "add it to TLS passthrough hosts, or enable auto-passthrough, to let it through";
+        logger.LogWarning(
+            "TLS interception failed: {ClientIp}→{SniHost}:{Port} — {Reason}. ALPN=[{Alpn}] JA3={Ja3Hash}. The client likely pins certificates or doesn't trust the IoTSpy CA; {Hint}",
+            clientIp, sniHost, port, reason, string.Join(", ", hello?.AlpnProtocols ?? []), hello?.Ja3Hash, hint);
+
+        try
+        {
+            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+            var capture = new CapturedRequest
+            {
+                DeviceId = device?.Id,
+                Method = "CONNECT",
+                Scheme = "tls-failed",
+                Host = sniHost,
+                Port = port,
+                Path = "/",
+                IsTls = true,
+                StatusMessage = $"TLS interception failed: {reason}",
+                Protocol = InterceptionProtocol.TlsPassthrough,
+                Timestamp = DateTimeOffset.UtcNow,
+                ClientIp = clientIp,
+                TlsMetadataJson = JsonSerializer.Serialize(new TlsMetadata
+                {
+                    SniHostname = hello?.SniHostname ?? string.Empty,
+                    Ja3Hash = hello?.Ja3Hash ?? string.Empty,
+                    Ja3Raw = hello?.Ja3Raw ?? string.Empty,
+                    ClientTlsVersion = hello?.TlsVersion ?? 0,
+                    ClientCipherSuites = hello?.CipherSuites ?? [],
+                    ClientExtensions = hello?.Extensions ?? [],
+                    ClientAlpnProtocols = hello?.AlpnProtocols ?? [],
+                    PassthroughReason = $"interception failed: {reason}"
+                })
+            };
+            await captures.AddAsync(capture, ct);
+            await publisher.PublishAsync(capture, ct);
+        }
+        catch (Exception recordEx) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(recordEx, "Failed to record TLS handshake failure for {SniHost}", sniHost);
+        }
+    }
+
+    /// <summary>Innermost message is usually the useful one, e.g. "Received fatal alert: UnknownCA".</summary>
+    internal static string DescribeHandshakeFailure(Exception ex)
+    {
+        var inner = ex;
+        while (inner.InnerException is not null) inner = inner.InnerException;
+        return inner == ex || string.IsNullOrWhiteSpace(inner.Message) ? ex.Message : $"{ex.Message} ({inner.Message})";
+    }
+
+    /// <summary>
+    /// Reads the client's first TLS record (the ClientHello). Returns length 0 if the client
+    /// closed before sending anything. The bytes must be replayed to whatever handles the
+    /// connection next (upstream for passthrough, <see cref="PrefixedStream"/> for MITM).
+    /// </summary>
+    private static async Task<(byte[] Buffer, int Length)> ReadClientHelloAsync(Stream clientStream, CancellationToken ct)
+    {
+        var buf = new byte[16 * 1024];
+        var len = 0;
+
+        while (len < 5)
+        {
+            var n = await clientStream.ReadAsync(buf.AsMemory(len), ct);
+            if (n == 0) return (buf, 0);
+            len += n;
+        }
+
+        var needed = TlsClientHelloParser.GetRecordLength(buf.AsSpan(0, len));
+        if (needed > 0)
+        {
+            if (needed > buf.Length) Array.Resize(ref buf, needed);
+            while (len < needed)
+            {
+                var n = await clientStream.ReadAsync(buf.AsMemory(len), ct);
+                if (n == 0) break;
+                len += n;
+            }
+        }
+        return (buf, len);
+    }
+
     // ── TLS passthrough with metadata capture ─────────────────────────────
 
     private async Task HandleTlsPassthroughAsync(
         TcpClient client, string host, int port,
-        string clientIp, IServiceScope scope, CancellationToken ct)
+        string clientIp, IServiceScope scope, CancellationToken ct,
+        byte[] initialBuf, int initialLen, ClientHelloInfo? parsedHello, string passthroughReason)
     {
         var started = DateTimeOffset.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var metadata = new TlsMetadata();
+        var metadata = new TlsMetadata { PassthroughReason = passthroughReason };
         long clientToServer = 0;
         long serverToClient = 0;
 
         var clientStream = client.GetStream();
 
-        // Buffer initial bytes from client to parse ClientHello
-        var initialBuf = new byte[16 * 1024];
-        var initialLen = 0;
-
-        while (initialLen < 5)
-        {
-            var n = await clientStream.ReadAsync(initialBuf.AsMemory(initialLen), ct);
-            if (n == 0) return;
-            initialLen += n;
-        }
-
-        var neededLen = TlsClientHelloParser.GetRecordLength(initialBuf.AsSpan(0, initialLen));
-        if (neededLen > 0)
-        {
-            if (neededLen > initialBuf.Length)
-                Array.Resize(ref initialBuf, neededLen);
-
-            while (initialLen < neededLen)
-            {
-                var n = await clientStream.ReadAsync(initialBuf.AsMemory(initialLen), ct);
-                if (n == 0) break;
-                initialLen += n;
-            }
-        }
-
         // Parse ClientHello for SNI and JA3
         var sniHost = host;
         ClientHelloInfo? clientHelloForDotCheck = null;
-        if (TlsClientHelloParser.TryParse(initialBuf.AsSpan(0, initialLen), out var clientHello))
+        if (parsedHello is { } clientHello)
         {
             clientHelloForDotCheck = clientHello;
             if (!string.IsNullOrEmpty(clientHello.SniHostname))
@@ -253,6 +365,7 @@ public class TransparentProxyServer(
             metadata.ClientTlsVersion = clientHello.TlsVersion;
             metadata.ClientCipherSuites = clientHello.CipherSuites;
             metadata.ClientExtensions = clientHello.Extensions;
+            metadata.ClientAlpnProtocols = clientHello.AlpnProtocols;
 
             logger.LogInformation(
                 "TLS passthrough ClientHello: {ClientIp}→{SniHostname} JA3={Ja3Hash} DnsCorrelationKey={DnsCorrelationKey}",
@@ -355,49 +468,40 @@ public class TransparentProxyServer(
                 }
             }
 
-            // Relay remaining traffic bidirectionally
+            // Record the capture now, before relaying: passthrough connections are often long-lived
+            // (Firestore streams, MQTT, push channels), and recording only at close left them
+            // invisible in IoTSpy for as long as they stayed open. Bytes/duration are filled in below.
+            var capture = await RecordPassthroughCaptureAsync(
+                scope, clientIp, sniHost, port, started, metadata, clientHelloForDotCheck, passthroughReason, ct);
+
+            // Relay remaining traffic bidirectionally. When one side finishes sending, pass the
+            // half-close on so the other side finishes too, instead of the relay idling until the
+            // server's keep-alive timeout.
             await Task.WhenAll(
-                RelayAndCountAsync(clientStream, upstreamStream, v => Interlocked.Add(ref clientToServer, v), ct),
-                RelayAndCountAsync(upstreamStream, clientStream, v => Interlocked.Add(ref serverToClient, v), ct));
+                RelayAndCountAsync(clientStream, upstreamStream, v => Interlocked.Add(ref clientToServer, v), ct, upstream.Client),
+                RelayAndCountAsync(upstreamStream, clientStream, v => Interlocked.Add(ref serverToClient, v), ct, client.Client));
 
             metadata.ClientToServerBytes = Interlocked.Read(ref clientToServer);
             metadata.ServerToClientBytes = Interlocked.Read(ref serverToClient);
+            sw.Stop();
+
+            if (capture is not null)
+            {
+                capture.DurationMs = sw.ElapsedMilliseconds;
+                capture.RequestBodySize = metadata.ClientToServerBytes;
+                capture.ResponseBodySize = metadata.ServerToClientBytes;
+                capture.TlsMetadataJson = JsonSerializer.Serialize(metadata);
+                try
+                {
+                    var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+                    await captures.UpdateAsync(capture, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to update passthrough capture for {SniHost}", sniHost);
+                }
+            }
         }
-
-        sw.Stop();
-
-        // Record capture
-        var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
-        var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-        var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
-
-        // Flag likely DNS-over-TLS (port 853 or a known-resolver SNI) — encrypted payload
-        // gives no further visibility, so this is the only detection signal available.
-        if (clientHelloForDotCheck is not null)
-            metadata.IsLikelyDot = DotDetector.IsLikelyDot(clientHelloForDotCheck, port);
-
-        var capture = new CapturedRequest
-        {
-            DeviceId = device?.Id,
-            Method = "CONNECT",
-            Scheme = "tls-passthrough",
-            Host = sniHost,
-            Port = port,
-            Path = "/",
-            IsTls = true,
-            TlsVersion = FormatTlsVersion(metadata.ServerTlsVersion),
-            TlsCipherSuite = $"0x{metadata.ServerCipherSuite:X4}",
-            Protocol = InterceptionProtocol.TlsPassthrough,
-            Timestamp = started,
-            DurationMs = sw.ElapsedMilliseconds,
-            ClientIp = clientIp,
-            RequestBodySize = metadata.ClientToServerBytes,
-            ResponseBodySize = metadata.ServerToClientBytes,
-            TlsMetadataJson = JsonSerializer.Serialize(metadata)
-        };
-
-        await captures.AddAsync(capture, ct);
-        await publisher.PublishAsync(capture, ct);
 
         logger.LogInformation(
             "TLS passthrough complete: {ClientIp}→{SniHostname}:{Port} Duration={DurationMs}ms " +
@@ -407,8 +511,52 @@ public class TransparentProxyServer(
             metadata.Ja3Hash, $"{clientIp}→{sniHost}");
     }
 
+    private async Task<CapturedRequest?> RecordPassthroughCaptureAsync(
+        IServiceScope scope, string clientIp, string sniHost, int port, DateTimeOffset started,
+        TlsMetadata metadata, ClientHelloInfo? clientHello, string passthroughReason, CancellationToken ct)
+    {
+        try
+        {
+            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+
+            // Flag likely DNS-over-TLS (port 853 or a known-resolver SNI) — encrypted payload
+            // gives no further visibility, so this is the only detection signal available.
+            if (clientHello is not null)
+                metadata.IsLikelyDot = DotDetector.IsLikelyDot(clientHello, port);
+
+            var capture = new CapturedRequest
+            {
+                DeviceId = device?.Id,
+                Method = "CONNECT",
+                Scheme = "tls-passthrough",
+                Host = sniHost,
+                Port = port,
+                Path = "/",
+                IsTls = true,
+                StatusMessage = passthroughReason.Length > 0 ? $"passthrough: {passthroughReason}" : string.Empty,
+                TlsVersion = FormatTlsVersion(metadata.ServerTlsVersion),
+                TlsCipherSuite = $"0x{metadata.ServerCipherSuite:X4}",
+                Protocol = InterceptionProtocol.TlsPassthrough,
+                Timestamp = started,
+                ClientIp = clientIp,
+                TlsMetadataJson = JsonSerializer.Serialize(metadata)
+            };
+
+            await captures.AddAsync(capture, ct);
+            await publisher.PublishAsync(capture, ct);
+            return capture;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to record passthrough capture for {SniHost}", sniHost);
+            return null;
+        }
+    }
+
     private static async Task RelayAndCountAsync(
-        Stream source, Stream dest, Action<long> addBytes, CancellationToken ct)
+        Stream source, Stream dest, Action<long> addBytes, CancellationToken ct, Socket? destSocket = null)
     {
         var buf = new byte[16 * 1024];
         try
@@ -423,6 +571,13 @@ public class TransparentProxyServer(
         }
         catch (IOException) { }
         catch (OperationCanceledException) { }
+        finally
+        {
+            // Propagate end-of-stream (or a reset) as a half-close to the other side.
+            try { destSocket?.Shutdown(SocketShutdown.Send); }
+            catch (SocketException) { }
+            catch (ObjectDisposedException) { }
+        }
     }
 
     private static string FormatTlsVersion(ushort version) => version switch
@@ -631,8 +786,19 @@ public class TransparentProxyServer(
 
             sw.Stop();
 
+            // A client that hangs up mid-response (an app cancelling a download) makes this write
+            // throw. Previously that skipped recording entirely — the exchange happened upstream, so
+            // record it, then end the connection.
+            var clientAborted = false;
             if (statusLine is not null)
-                await WriteHttpMessageAsync(clientStream, statusLine, respHeaders, respBodyBytes, ct);
+            {
+                try { await WriteHttpMessageAsync(clientStream, statusLine, respHeaders, respBodyBytes, ct); }
+                catch (IOException) when (!ct.IsCancellationRequested)
+                {
+                    clientAborted = true;
+                    logger.LogDebug("Client {ClientIp} closed before the response from {Host}{Path} was delivered", clientIp, captureHost, path);
+                }
+            }
 
             ParseRequestLine(reqLine ?? "", out method, out path, out query);
             ParseStatusLine(statusLine, out var statusCode, out var statusMsg);
@@ -716,7 +882,8 @@ public class TransparentProxyServer(
                 transparentUpstreamReleased = true;
             }
 
-            if (respHeaders.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
+            if (clientAborted ||
+                respHeaders.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
             }

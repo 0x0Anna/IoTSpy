@@ -18,6 +18,8 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
   const [captureResponseBodies, setCaptureResponseBodies] = useState(settings.captureResponseBodies)
   const [maxBodySizeKb, setMaxBodySizeKb] = useState(String(settings.maxBodySizeKb))
   const [autoStart, setAutoStart] = useState(settings.autoStart)
+  const [tlsPassthroughHosts, setTlsPassthroughHosts] = useState(settings.tlsPassthroughHosts ?? '')
+  const [autoPassthrough, setAutoPassthrough] = useState(settings.autoPassthroughOnTlsFailure ?? false)
   const [transparentProxyPort, setTransparentProxyPort] = useState(String(settings.transparentProxyPort))
   const [targetDeviceIp, setTargetDeviceIp] = useState(settings.targetDeviceIp)
   const [gatewayIp, setGatewayIp] = useState(settings.gatewayIp)
@@ -67,6 +69,8 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
       captureResponseBodies,
       maxBodySizeKb: bodyKb,
       autoStart,
+      tlsPassthroughHosts,
+      autoPassthroughOnTlsFailure: autoPassthrough,
     }
     if (mode === 'GatewayRedirect') {
       update.transparentProxyPort = Number(transparentProxyPort) || settings.transparentProxyPort
@@ -224,6 +228,38 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
             />
             Intercept TLS (HTTPS MITM)
           </label>
+
+          {captureTls && (
+            <>
+              <div className="settings-field">
+                <label className="settings-label" htmlFor="tls-passthrough-hosts">
+                  TLS passthrough hosts (relayed untouched, recorded as metadata)
+                </label>
+                <textarea
+                  id="tls-passthrough-hosts"
+                  className="settings-input"
+                  rows={4}
+                  value={tlsPassthroughHosts}
+                  onChange={(e) => setTlsPassthroughHosts(e.target.value)}
+                  placeholder={'One per line, e.g.\n*.apple.com\ngateway.icloud.com'}
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  For certificate-pinned hosts. <code>*.example.com</code> also matches <code>example.com</code>.
+                  Clients that only offer HTTP/2 (e.g. gRPC) are relayed automatically.
+                </span>
+              </div>
+
+              <label className="settings-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={autoPassthrough}
+                  onChange={(e) => setAutoPassthrough(e.target.checked)}
+                />
+                Auto-passthrough hosts that keep rejecting the IoTSpy certificate (3 failures → relayed for 30 min)
+              </label>
+            </>
+          )}
 
           <label className="settings-checkbox-row">
             <input

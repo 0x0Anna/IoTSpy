@@ -13,6 +13,13 @@ public class TlsMetadata
     public ushort ClientTlsVersion { get; set; }
     public List<ushort> ClientCipherSuites { get; set; } = [];
     public List<ushort> ClientExtensions { get; set; } = [];
+    /// <summary>ALPN protocols the client offered (e.g. <c>h2</c>, <c>http/1.1</c>).</summary>
+    public List<string> ClientAlpnProtocols { get; set; } = [];
+
+    /// <summary>Why the connection was relayed without MITM (e.g. "h2-only client",
+    /// "bypass list", "auto: repeated handshake failures"), or why interception failed.
+    /// Empty for connections passed through only because TLS capture is off.</summary>
+    public string PassthroughReason { get; set; } = string.Empty;
 
     // ServerHello-derived
     public string Ja3sHash { get; set; } = string.Empty;

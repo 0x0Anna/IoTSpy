@@ -50,6 +50,13 @@ public class ProxyController(IProxyService proxy) : ControllerBase
         settings.NetworkInterface = dto.NetworkInterface ?? settings.NetworkInterface;
         settings.SslStrip = dto.SslStrip ?? settings.SslStrip;
         settings.AutoStart = dto.AutoStart ?? settings.AutoStart;
+        if (dto.TlsPassthroughHosts is not null)
+        {
+            if (dto.TlsPassthroughHosts.Length > 16_384)
+                return BadRequest(new { error = "tlsPassthroughHosts is too long (max 16384 characters)." });
+            settings.TlsPassthroughHosts = dto.TlsPassthroughHosts.Trim();
+        }
+        settings.AutoPassthroughOnTlsFailure = dto.AutoPassthroughOnTlsFailure ?? settings.AutoPassthroughOnTlsFailure;
         if (!string.IsNullOrWhiteSpace(dto.CaCommonName)) settings.CaCommonName = dto.CaCommonName;
         if (!string.IsNullOrWhiteSpace(dto.CaOrganization)) settings.CaOrganization = dto.CaOrganization;
         if (!string.IsNullOrWhiteSpace(dto.CaCountry)) settings.CaCountry = dto.CaCountry;
@@ -78,5 +85,7 @@ public record UpdateProxySettingsDto(
     string? CaCommonName = null,
     string? CaOrganization = null,
     string? CaCountry = null,
-    int? CaValidityYears = null
+    int? CaValidityYears = null,
+    string? TlsPassthroughHosts = null,
+    bool? AutoPassthroughOnTlsFailure = null
 );
