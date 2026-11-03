@@ -1,22 +1,34 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
+  /* Size to the *visible* viewport. On iOS Safari, vh-based sizes (and fixed elements in newer
+     versions) can extend behind the browser toolbars, which pushed the modal's footer — Save and
+     Cancel — off-screen on phones. */
+  height: 100%;
+  height: 100dvh;
   background-color: rgba(0, 0, 0, 0.6);
   display: flex;
-  align-items: center;
-  justify-content: center;
   z-index: 100;
   padding: var(--space-4);
+  padding-bottom: max(var(--space-4), env(safe-area-inset-bottom));
+  /* Last resort: anything that still doesn't fit can be scrolled to rather than clipped. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .modal {
+  /* margin: auto, not align-items: center — centred flex content taller than its container is
+     clipped at both ends with no way to scroll to it ("unsafe" centring). */
+  margin: auto;
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   width: 100%;
   max-width: 520px;
-  max-height: 90vh;
+  /* Never taller than the overlay's visible area, so the footer always stays on screen and only
+     the body scrolls. */
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -223,7 +235,7 @@ textarea.settings-input {
 
 .preview-modal {
   max-width: min(760px, 96vw);
-  max-height: 92vh;
+  max-height: 100%; /* of the overlay's visible area — see .modal */
 }
 
 .preview-modal__mode-toggle {
@@ -400,5 +412,5 @@ textarea.settings-input {
 
 .asset-picker-modal {
   max-width: min(720px, 94vw);
-  max-height: 90vh;
+  max-height: 100%; /* of the overlay's visible area — see .modal */
 }
