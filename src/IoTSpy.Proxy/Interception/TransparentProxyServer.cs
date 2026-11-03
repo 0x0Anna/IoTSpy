@@ -139,8 +139,20 @@ public class TransparentProxyServer(
                 {
                     // Read the ClientHello before choosing how to handle the connection: SNI and
                     // ALPN decide whether the MITM can serve this client at all (see TlsInterceptionPolicy).
-                    var (helloBuf, helloLen) = await ReadClientHelloAsync(client.GetStream(), ct);
-                    if (helloLen == 0) return;
+                    var (helloBuf, helloLen, firstReadTimedOut) = await ReadClientHelloAsync(client.GetStream(), ct);
+                    if (helloLen == 0 && !firstReadTimedOut) return;
+
+                    // Not TLS at all (a proprietary protocol on 443/8883, or a server-speaks-first
+                    // protocol that sent nothing): the MITM can only break it. Relay it as raw TCP.
+                    if (firstReadTimedOut || !LooksLikeTlsHandshake(helloBuf.AsSpan(0, helloLen)))
+                    {
+                        var why = firstReadTimedOut
+                            ? $"client sent nothing within {FirstReadTimeout.TotalSeconds:0}s (server-speaks-first protocol?)"
+                            : $"not TLS (first bytes {Convert.ToHexString(helloBuf, 0, Math.Min(helloLen, 8))})";
+                        logger.LogInformation("Raw TCP passthrough {ClientIp}→{Host}:{Port} — {Reason}", clientIp, host, destPort, why);
+                        await HandleRawPassthroughAsync(client, host, destPort, clientIp, scope, ct, helloBuf, helloLen, why);
+                        return;
+                    }
                     ClientHelloInfo? hello = TlsClientHelloParser.TryParse(helloBuf.AsSpan(0, helloLen), out var parsed) ? parsed : null;
                     var sniHost = TransparentTls.ResolveHostName(hello?.SniHostname, host);
 
@@ -309,15 +321,40 @@ public class TransparentProxyServer(
     /// closed before sending anything. The bytes must be replayed to whatever handles the
     /// connection next (upstream for passthrough, <see cref="PrefixedStream"/> for MITM).
     /// </summary>
-    private static async Task<(byte[] Buffer, int Length)> ReadClientHelloAsync(Stream clientStream, CancellationToken ct)
+    internal static readonly TimeSpan FirstReadTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>A TLS handshake record starts 0x16 0x03 &lt;minor&gt;.</summary>
+    internal static bool LooksLikeTlsHandshake(ReadOnlySpan<byte> data) =>
+        data.Length >= 2 && data[0] == 0x16 && data[1] == 0x03;
+
+    private static async Task<(byte[] Buffer, int Length, bool FirstReadTimedOut)> ReadClientHelloAsync(Stream clientStream, CancellationToken ct)
     {
         var buf = new byte[16 * 1024];
         var len = 0;
 
+        // First read is bounded: a protocol where the server speaks first would otherwise wait
+        // here forever for a ClientHello that never comes.
+        using (var firstRead = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            firstRead.CancelAfter(FirstReadTimeout);
+            try
+            {
+                len = await clientStream.ReadAsync(buf, firstRead.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return (buf, 0, true);
+            }
+        }
+        if (len == 0) return (buf, 0, false);
+        // Not a TLS record: hand back what we have rather than waiting for more bytes that a
+        // non-TLS protocol may never send before hearing from the server.
+        if (buf[0] != 0x16) return (buf, len, false);
+
         while (len < 5)
         {
             var n = await clientStream.ReadAsync(buf.AsMemory(len), ct);
-            if (n == 0) return (buf, 0);
+            if (n == 0) return (buf, 0, false);
             len += n;
         }
 
@@ -332,7 +369,81 @@ public class TransparentProxyServer(
                 len += n;
             }
         }
-        return (buf, len);
+        return (buf, len, false);
+    }
+
+    /// <summary>
+    /// Relays a connection on a TLS port whose traffic isn't TLS, byte for byte, recording a
+    /// capture up front (updated with bytes/duration at close).
+    /// </summary>
+    private async Task HandleRawPassthroughAsync(
+        TcpClient client, string host, int port, string clientIp, IServiceScope scope, CancellationToken ct,
+        byte[] initialBuf, int initialLen, string reason)
+    {
+        var started = DateTimeOffset.UtcNow;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long clientToServer = initialLen, serverToClient = 0;
+        var clientStream = client.GetStream();
+
+        var upstream = new TcpClient();
+        await perHostPipelines.GetPipeline(host, port).ExecuteAsync(async token =>
+        {
+            await upstream.ConnectAsync(host, port, token);
+            return upstream;
+        }, ct);
+
+        CapturedRequest? capture = null;
+        using (upstream)
+        {
+            var upstreamStream = upstream.GetStream();
+            if (initialLen > 0)
+                await upstreamStream.WriteAsync(initialBuf.AsMemory(0, initialLen), ct);
+
+            try
+            {
+                var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+                var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+                capture = new CapturedRequest
+                {
+                    DeviceId = device?.Id,
+                    Method = "CONNECT",
+                    Scheme = "tcp-passthrough",
+                    Host = host,
+                    Port = port,
+                    Path = "/",
+                    StatusMessage = $"passthrough: {reason}",
+                    Protocol = InterceptionProtocol.Other,
+                    Timestamp = started,
+                    ClientIp = clientIp,
+                    // Keep the opening bytes (hex) to help identify the protocol later.
+                    RequestBody = initialLen > 0 ? "hex:" + Convert.ToHexString(initialBuf, 0, Math.Min(initialLen, 256)) : string.Empty
+                };
+                await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().AddAsync(capture, ct);
+                await publisher.PublishAsync(capture, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Failed to record raw passthrough capture for {Host}:{Port}", host, port);
+                capture = null;
+            }
+
+            await Task.WhenAll(
+                RelayAndCountAsync(clientStream, upstreamStream, v => Interlocked.Add(ref clientToServer, v), ct, upstream.Client),
+                RelayAndCountAsync(upstreamStream, clientStream, v => Interlocked.Add(ref serverToClient, v), ct, client.Client));
+        }
+        sw.Stop();
+
+        if (capture is not null)
+        {
+            capture.DurationMs = sw.ElapsedMilliseconds;
+            capture.RequestBodySize = Interlocked.Read(ref clientToServer);
+            capture.ResponseBodySize = Interlocked.Read(ref serverToClient);
+            try { await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().UpdateAsync(capture, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to update raw passthrough capture for {Host}:{Port}", host, port); }
+        }
+
+        logger.LogInformation("Raw TCP passthrough complete: {ClientIp}→{Host}:{Port} Duration={DurationMs}ms C→S={C2S}B S→C={S2C}B",
+            clientIp, host, port, sw.ElapsedMilliseconds, Interlocked.Read(ref clientToServer), Interlocked.Read(ref serverToClient));
     }
 
     // ── TLS passthrough with metadata capture ─────────────────────────────
