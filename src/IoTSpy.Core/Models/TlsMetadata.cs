@@ -41,6 +41,11 @@ public class TlsMetadata
     public long ClientToServerBytes { get; set; }
     public long ServerToClientBytes { get; set; }
 
+    /// <summary>How many connections this record covers. Repeated passthrough connections from
+    /// one client to one host are folded into one capture per window; the byte counts above are
+    /// then totals across all of them, and the handshake fields describe the first one.</summary>
+    public int ConnectionCount { get; set; } = 1;
+
     /// <summary>Heuristically flagged as DNS-over-TLS (port 853 or a known-resolver SNI) by
     /// <c>IoTSpy.Proxy.Tls.DotDetector</c>. See that type for the detection rationale.</summary>
     public bool IsLikelyDot { get; set; }

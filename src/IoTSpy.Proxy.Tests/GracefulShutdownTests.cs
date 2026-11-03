@@ -85,6 +85,7 @@ public class GracefulShutdownTests
             Substitute.For<IUpstreamConnectionPool>(),
             Substitute.For<IProtocolMessageWriter>(),
             new TlsInterceptionPolicy(TimeProvider.System),
+            new PassthroughCaptureCoalescer(TimeProvider.System),
             NullLogger<TransparentProxyServer>.Instance);
     }
 }

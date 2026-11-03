@@ -10,6 +10,12 @@ public interface ICaptureRepository
     Task<int> CountAsync(CaptureFilter filter, CancellationToken ct = default);
     Task<CapturedRequest?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task UpdateAsync(CapturedRequest capture, CancellationToken ct = default);
+
+    /// <summary>Overwrites only the traffic totals of an existing capture (no load, no change
+    /// tracking). Used to fold repeated passthrough connections into one row. Returns false when
+    /// the capture no longer exists (deleted or purged meanwhile).</summary>
+    Task<bool> UpdateTrafficStatsAsync(Guid id, long durationMs, long requestBodySize, long responseBodySize,
+        string statusMessage, string tlsMetadataJson, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task ClearAsync(Guid? deviceId = null, CancellationToken ct = default);
     Task ClearByFilterAsync(CaptureFilter filter, CancellationToken ct = default);

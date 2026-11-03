@@ -45,6 +45,7 @@ public class TransparentProxyServer(
     IUpstreamConnectionPool connectionPool,
     IProtocolMessageWriter protocolMessageWriter,
     TlsInterceptionPolicy tlsPolicy,
+    PassthroughCaptureCoalescer passthroughCoalescer,
     ILogger<TransparentProxyServer> logger)
 {
     private TcpListener? _listener;
@@ -160,13 +161,48 @@ public class TransparentProxyServer(
                         ? tlsPolicy.Decide(hello, sniHost, clientIp, settings)
                         : TlsInterceptionVerdict.Bypass(string.Empty);
 
+                    // Drop/Delay rules matching the connection (CONNECT sni:port) — the only way to
+                    // act on traffic the HTTP pipeline never sees (passthrough, or a client that
+                    // rejects the interception certificate).
+                    var connRules = await manipulationService.MatchConnectionRulesAsync(sniHost, destPort, ct);
+                    if (!connRules.IsEmpty)
+                    {
+                        // Delay only connections that won't reach the HTTP pipeline: intercepted
+                        // HTTP already gets the Delay per request, and must not be delayed twice.
+                        var delayMs = verdict.Passthrough || tlsPolicy.HasRecentFailures(clientIp, sniHost)
+                            ? connRules.TotalDelayMs
+                            : 0;
+                        if (delayMs > 0)
+                        {
+                            var handled = await HoldConnectionAsync(client, clientIp, sniHost, destPort, hello,
+                                connRules, delayMs, verdict, scope, ct);
+                            if (handled) return;
+                        }
+                        else if (connRules.Drop is { } dropRule)
+                        {
+                            await RecordDroppedConnectionAsync(clientIp, sniHost, destPort, hello, dropRule, scope, ct);
+                            return;
+                        }
+                    }
+
                     if (verdict.Passthrough)
                     {
+                        // Repeat connections to the same host share one capture row and log at
+                        // Debug; only the first in each window is logged at Information.
+                        var (group, isFirst) = passthroughCoalescer.Join(clientIp, sniHost, destPort);
                         if (verdict.Reason.Length > 0)
-                            logger.LogInformation("TLS passthrough {ClientIp}→{SniHost}:{Port} — {Reason}",
+                            logger.Log(isFirst ? LogLevel.Information : LogLevel.Debug,
+                                "TLS passthrough {ClientIp}→{SniHost}:{Port} — {Reason}",
                                 clientIp, sniHost, destPort, verdict.Reason);
-                        await HandleTlsPassthroughAsync(client, host, destPort, clientIp, scope, ct,
-                            helloBuf, helloLen, hello, verdict.Reason);
+                        try
+                        {
+                            await HandleTlsPassthroughAsync(client, host, destPort, clientIp, scope, ct,
+                                helloBuf, helloLen, hello, verdict.Reason, group, isFirst);
+                        }
+                        finally
+                        {
+                            if (isFirst && group.CaptureId is null) group.Abandon();
+                        }
                     }
                     else
                     {
@@ -287,17 +323,7 @@ public class TransparentProxyServer(
                 Protocol = InterceptionProtocol.TlsPassthrough,
                 Timestamp = DateTimeOffset.UtcNow,
                 ClientIp = clientIp,
-                TlsMetadataJson = JsonSerializer.Serialize(new TlsMetadata
-                {
-                    SniHostname = hello?.SniHostname ?? string.Empty,
-                    Ja3Hash = hello?.Ja3Hash ?? string.Empty,
-                    Ja3Raw = hello?.Ja3Raw ?? string.Empty,
-                    ClientTlsVersion = hello?.TlsVersion ?? 0,
-                    ClientCipherSuites = hello?.CipherSuites ?? [],
-                    ClientExtensions = hello?.Extensions ?? [],
-                    ClientAlpnProtocols = hello?.AlpnProtocols ?? [],
-                    PassthroughReason = $"interception failed: {reason}"
-                })
+                TlsMetadataJson = JsonSerializer.Serialize(HelloMetadata(hello, $"interception failed: {reason}"))
             };
             await captures.AddAsync(capture, ct);
             await publisher.PublishAsync(capture, ct);
@@ -307,6 +333,121 @@ public class TransparentProxyServer(
             logger.LogWarning(recordEx, "Failed to record TLS handshake failure for {SniHost}", sniHost);
         }
     }
+
+    /// <summary>
+    /// Holds a connection matched by Delay rules for <paramref name="delayMs"/> without answering
+    /// its ClientHello — a tarpit, to see whether the client times out and backs off. Watches the
+    /// socket so a client that gives up is noticed (and its wait recorded) straight away. Returns
+    /// true when the connection is finished with (client gave up, or a Drop rule followed the
+    /// Delay); false to carry on handling it normally.
+    /// </summary>
+    private async Task<bool> HoldConnectionAsync(
+        TcpClient client, string clientIp, string sniHost, int port, ClientHelloInfo? hello,
+        ConnectionRuleMatch rules, int delayMs, TlsInterceptionVerdict verdict, IServiceScope scope, CancellationToken ct)
+    {
+        var ruleNames = string.Join(", ", rules.Delays.Select(r => $"'{r.Name}'"));
+        var (group, isFirst) = passthroughCoalescer.Join(clientIp, sniHost, port, PassthroughCaptureCoalescer.Delayed);
+        logger.Log(isFirst ? LogLevel.Information : LogLevel.Debug,
+            "Holding TLS connection {ClientIp}→{SniHost}:{Port} for {DelayMs}ms (rule {RuleNames})",
+            clientIp, sniHost, port, delayMs, ruleNames);
+
+        var metadata = HelloMetadata(hello, $"held {delayMs}ms by rule {ruleNames}");
+        if (isFirst)
+            await RecordRuleCaptureAsync(group, "tls-delayed", $"Held {delayMs / 1000.0:0.#}s by rule {ruleNames}",
+                clientIp, sniHost, port, metadata, scope, ct);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var gaveUp = false;
+        while (sw.ElapsedMilliseconds < delayMs)
+        {
+            if (ClientHasClosed(client.Client)) { gaveUp = true; break; }
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(250, delayMs - sw.ElapsedMilliseconds)), ct);
+        }
+
+        var then = rules.Drop is not null ? "dropped" : verdict.Passthrough ? "relayed" : "intercepted";
+        group.RecordHold(sw.ElapsedMilliseconds, gaveUp, then);
+        logger.LogDebug("Held {ClientIp}→{SniHost}:{Port} {WaitedMs}ms: {Outcome}", clientIp, sniHost, port,
+            sw.ElapsedMilliseconds, gaveUp ? "client gave up" : $"waited, then {then}");
+        await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
+
+        return gaveUp || rules.Drop is not null;
+    }
+
+    /// <summary>Readable with nothing to read means the peer closed (FIN) or reset.</summary>
+    private static bool ClientHasClosed(Socket socket)
+    {
+        try { return socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0; }
+        catch (SocketException) { return true; }
+        catch (ObjectDisposedException) { return true; }
+    }
+
+    /// <summary>Records the capture row of a coalesced group opened by a rule (dropped/delayed).</summary>
+    private async Task RecordRuleCaptureAsync(
+        PassthroughCaptureCoalescer.Group group, string scheme, string status,
+        string clientIp, string sniHost, int port, TlsMetadata metadata, IServiceScope scope, CancellationToken ct)
+    {
+        try
+        {
+            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
+            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+            var capture = new CapturedRequest
+            {
+                DeviceId = device?.Id,
+                Method = "CONNECT",
+                Scheme = scheme,
+                Host = sniHost,
+                Port = port,
+                Path = "/",
+                IsTls = true,
+                StatusMessage = status,
+                Protocol = InterceptionProtocol.TlsPassthrough,
+                Timestamp = DateTimeOffset.UtcNow,
+                ClientIp = clientIp,
+                TlsMetadataJson = JsonSerializer.Serialize(metadata)
+            };
+            await captures.AddAsync(capture, ct);
+            await publisher.PublishAsync(capture, ct);
+            group.Recorded(capture.Id, capture.StatusMessage, metadata);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to record {Scheme} connection to {SniHost}", scheme, sniHost);
+        }
+        finally
+        {
+            if (group.CaptureId is null) group.Abandon();
+        }
+    }
+
+    private async Task RecordDroppedConnectionAsync(
+        string clientIp, string sniHost, int port, ClientHelloInfo? hello, ManipulationRule rule,
+        IServiceScope scope, CancellationToken ct)
+    {
+        var (group, isFirst) = passthroughCoalescer.Join(clientIp, sniHost, port, PassthroughCaptureCoalescer.Dropped);
+        logger.Log(isFirst ? LogLevel.Information : LogLevel.Debug,
+            "TLS connection dropped by rule '{RuleName}': {ClientIp}→{SniHost}:{Port}", rule.Name, clientIp, sniHost, port);
+
+        var metadata = HelloMetadata(hello, $"dropped by rule '{rule.Name}'");
+        if (isFirst)
+            await RecordRuleCaptureAsync(group, "tls-dropped", $"Dropped by rule '{rule.Name}'",
+                clientIp, sniHost, port, metadata, scope, ct);
+
+        // Later drops in the window only bump the row's connection count.
+        if (!isFirst) await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
+    }
+
+    private static TlsMetadata HelloMetadata(ClientHelloInfo? hello, string reason) => new()
+    {
+        SniHostname = hello?.SniHostname ?? string.Empty,
+        Ja3Hash = hello?.Ja3Hash ?? string.Empty,
+        Ja3Raw = hello?.Ja3Raw ?? string.Empty,
+        ClientTlsVersion = hello?.TlsVersion ?? 0,
+        ClientCipherSuites = hello?.CipherSuites ?? [],
+        ClientExtensions = hello?.Extensions ?? [],
+        ClientAlpnProtocols = hello?.AlpnProtocols ?? [],
+        PassthroughReason = reason
+    };
 
     /// <summary>Innermost message is usually the useful one, e.g. "Received fatal alert: UnknownCA".</summary>
     internal static string DescribeHandshakeFailure(Exception ex)
@@ -451,8 +592,10 @@ public class TransparentProxyServer(
     private async Task HandleTlsPassthroughAsync(
         TcpClient client, string host, int port,
         string clientIp, IServiceScope scope, CancellationToken ct,
-        byte[] initialBuf, int initialLen, ClientHelloInfo? parsedHello, string passthroughReason)
+        byte[] initialBuf, int initialLen, ClientHelloInfo? parsedHello, string passthroughReason,
+        PassthroughCaptureCoalescer.Group group, bool isFirst)
     {
+        var detail = isFirst ? LogLevel.Information : LogLevel.Debug;
         var started = DateTimeOffset.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var metadata = new TlsMetadata { PassthroughReason = passthroughReason };
@@ -478,7 +621,7 @@ public class TransparentProxyServer(
             metadata.ClientExtensions = clientHello.Extensions;
             metadata.ClientAlpnProtocols = clientHello.AlpnProtocols;
 
-            logger.LogInformation(
+            logger.Log(detail,
                 "TLS passthrough ClientHello: {ClientIp}→{SniHostname} JA3={Ja3Hash} DnsCorrelationKey={DnsCorrelationKey}",
                 clientIp, sniHost, clientHello.Ja3Hash, $"{clientIp}→{sniHost}");
         }
@@ -582,8 +725,13 @@ public class TransparentProxyServer(
             // Record the capture now, before relaying: passthrough connections are often long-lived
             // (Firestore streams, MQTT, push channels), and recording only at close left them
             // invisible in IoTSpy for as long as they stayed open. Bytes/duration are filled in below.
-            var capture = await RecordPassthroughCaptureAsync(
-                scope, clientIp, sniHost, port, started, metadata, clientHelloForDotCheck, passthroughReason, ct);
+            // Only the group's first connection records a row; the rest add to its totals.
+            if (isFirst)
+            {
+                var capture = await RecordPassthroughCaptureAsync(
+                    scope, clientIp, sniHost, port, started, metadata, clientHelloForDotCheck, passthroughReason, ct);
+                if (capture is not null) group.Recorded(capture.Id, capture.StatusMessage, metadata);
+            }
 
             // Relay remaining traffic bidirectionally. When one side finishes sending, pass the
             // half-close on so the other side finishes too, instead of the relay idling until the
@@ -596,30 +744,54 @@ public class TransparentProxyServer(
             metadata.ServerToClientBytes = Interlocked.Read(ref serverToClient);
             sw.Stop();
 
-            if (capture is not null)
-            {
-                capture.DurationMs = sw.ElapsedMilliseconds;
-                capture.RequestBodySize = metadata.ClientToServerBytes;
-                capture.ResponseBodySize = metadata.ServerToClientBytes;
-                capture.TlsMetadataJson = JsonSerializer.Serialize(metadata);
-                try
-                {
-                    var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-                    await captures.UpdateAsync(capture, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to update passthrough capture for {SniHost}", sniHost);
-                }
-            }
+            await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
         }
 
-        logger.LogInformation(
+        logger.Log(detail,
             "TLS passthrough complete: {ClientIp}→{SniHostname}:{Port} Duration={DurationMs}ms " +
             "C→S={ClientToServerBytes}B S→C={ServerToClientBytes}B JA3={Ja3Hash} DnsCorrelationKey={DnsCorrelationKey}",
             clientIp, sniHost, port, sw.ElapsedMilliseconds,
             metadata.ClientToServerBytes, metadata.ServerToClientBytes,
             metadata.Ja3Hash, $"{clientIp}→{sniHost}");
+    }
+
+    /// <summary>Adds a finished connection's bytes to its group and rewrites the group's capture
+    /// row with the running totals.</summary>
+    private async Task UpdatePassthroughGroupAsync(
+        IServiceScope scope, PassthroughCaptureCoalescer.Group group, TlsMetadata metadata, string sniHost)
+    {
+        group.Complete(metadata.ClientToServerBytes, metadata.ServerToClientBytes, DateTimeOffset.UtcNow);
+        await group.WriteGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            // Read the totals again inside the gate: a connection that finished after this one may
+            // already have written newer ones, and writing ours now would roll the row back.
+            if (group.Snapshot() is not { } row) return;
+            var totals = row.Totals;
+            row.Metadata.ClientToServerBytes = totals.ClientToServerBytes;
+            row.Metadata.ServerToClientBytes = totals.ServerToClientBytes;
+            row.Metadata.ConnectionCount = totals.Connections;
+            var details = new List<string>();
+            if (totals.Connections > 1) details.Add($"{totals.Connections} connections");
+            if (group.HoldSummary() is { Length: > 0 } holds) details.Add(holds);
+            var status = details.Count > 0
+                ? $"{row.StatusMessage} ({string.Join("; ", details)})".TrimStart()
+                : row.StatusMessage;
+
+            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
+            var updated = await captures.UpdateTrafficStatsAsync(row.CaptureId, totals.DurationMs,
+                totals.ClientToServerBytes, totals.ServerToClientBytes, status,
+                JsonSerializer.Serialize(row.Metadata), CancellationToken.None);
+            if (!updated) group.RowDeleted();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to update passthrough capture for {SniHost}", sniHost);
+        }
+        finally
+        {
+            group.WriteGate.Release();
+        }
     }
 
     private async Task<CapturedRequest?> RecordPassthroughCaptureAsync(

@@ -94,6 +94,19 @@ public sealed class TlsInterceptionPolicy(TimeProvider time)
     public void RecordHandshakeSuccess(string clientIp, string host) =>
         _failures.TryRemove((clientIp, Normalize(host)), out _);
 
+    /// <summary>True when this client has rejected the interception certificate for this host
+    /// recently — its next connection most likely won't reach the HTTP pipeline either.</summary>
+    public bool HasRecentFailures(string clientIp, string host)
+    {
+        if (!_failures.TryGetValue((clientIp, Normalize(host)), out var state)) return false;
+        lock (state.Gate)
+        {
+            var now = time.GetUtcNow();
+            return (state.Count > 0 && now - state.WindowStart <= FailureWindow)
+                   || (state.BypassUntil is { } until && now < until);
+        }
+    }
+
     internal bool IsAutoBypassed(string clientIp, string host)
     {
         if (!_failures.TryGetValue((clientIp, Normalize(host)), out var state)) return false;

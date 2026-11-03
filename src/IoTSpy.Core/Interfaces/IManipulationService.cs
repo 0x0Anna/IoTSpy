@@ -16,6 +16,15 @@ public interface IManipulationService
     Task<bool> ApplyAsync(HttpMessage message, ManipulationPhase phase, CancellationToken ct = default);
 
     /// <summary>
+    /// Connection-level rule check for traffic the HTTP pipeline never sees — TLS that is relayed
+    /// untouched (passthrough) or whose handshake fails. Matches enabled request-phase Drop and
+    /// Delay rules against the connection as <c>CONNECT host:port</c> with path <c>/</c>, so a rule
+    /// with only a host pattern (or a method pattern of <c>CONNECT</c>) applies to the connection.
+    /// Returns the matching Delay rules in priority order up to the first matching Drop rule.
+    /// </summary>
+    Task<ConnectionRuleMatch> MatchConnectionRulesAsync(string host, int port, CancellationToken ct = default);
+
+    /// <summary>
     /// Replay a captured request (optionally modified) and return the session with the response.
     /// </summary>
     Task<ReplaySession> ReplayAsync(ReplaySession session, CancellationToken ct = default);
