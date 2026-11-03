@@ -114,4 +114,17 @@ public class PassthroughCaptureCoalescerTests
         Assert.True(c.Join(DeviceIp, Telemetry, 443, PassthroughCaptureCoalescer.Dropped).IsFirst);
         Assert.False(c.Join(DeviceIp, Telemetry, 443, PassthroughCaptureCoalescer.Dropped).IsFirst);
     }
+
+    [Fact]
+    public void DeletedRow_NextConnectionStartsNewGroup()
+    {
+        var c = new PassthroughCaptureCoalescer(new FakeTimeProvider());
+        var (first, _) = c.Join(DeviceIp, Telemetry, 443);
+        first.Recorded(Guid.NewGuid(), "passthrough: x", new TlsMetadata());
+        first.RowDeleted(); // user purged captures mid-window
+
+        var (next, isNew) = c.Join(DeviceIp, Telemetry, 443);
+        Assert.True(isNew);
+        Assert.NotSame(first, next);
+    }
 }

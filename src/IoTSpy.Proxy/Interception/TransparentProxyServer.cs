@@ -707,9 +707,10 @@ public class TransparentProxyServer(
                 : row.StatusMessage;
 
             var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-            await captures.UpdateTrafficStatsAsync(row.CaptureId, totals.DurationMs,
+            var updated = await captures.UpdateTrafficStatsAsync(row.CaptureId, totals.DurationMs,
                 totals.ClientToServerBytes, totals.ServerToClientBytes, status,
                 JsonSerializer.Serialize(row.Metadata), CancellationToken.None);
+            if (!updated) group.RowDeleted();
         }
         catch (Exception ex)
         {

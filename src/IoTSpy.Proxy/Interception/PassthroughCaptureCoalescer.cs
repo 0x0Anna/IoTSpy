@@ -91,6 +91,11 @@ public sealed class PassthroughCaptureCoalescer(TimeProvider time)
         /// the next connection for this client+host starts a fresh group and tries again.</summary>
         public void Abandon() { lock (_lock) if (CaptureId is null) Abandoned = true; }
 
+        /// <summary>The group's capture row was deleted (e.g. the user purged captures). The next
+        /// connection starts a fresh group, so the traffic shows up again straight away instead of
+        /// being folded into a row that no longer exists until the window ends.</summary>
+        public void RowDeleted() { lock (_lock) Abandoned = true; }
+
         /// <summary>Adds a finished connection's traffic and returns the group's running totals.</summary>
         public PassthroughTotals Complete(long clientToServer, long serverToClient, DateTimeOffset ended)
         {

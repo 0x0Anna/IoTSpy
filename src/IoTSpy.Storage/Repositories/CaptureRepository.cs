@@ -40,14 +40,14 @@ public class CaptureRepository(IoTSpyDbContext db) : ICaptureRepository
         await db.SaveChangesAsync(ct);
     }
 
-    public Task UpdateTrafficStatsAsync(Guid id, long durationMs, long requestBodySize, long responseBodySize,
+    public async Task<bool> UpdateTrafficStatsAsync(Guid id, long durationMs, long requestBodySize, long responseBodySize,
         string statusMessage, string tlsMetadataJson, CancellationToken ct = default) =>
-        db.Captures.Where(c => c.Id == id).ExecuteUpdateAsync(s => s
+        await db.Captures.Where(c => c.Id == id).ExecuteUpdateAsync(s => s
             .SetProperty(c => c.DurationMs, durationMs)
             .SetProperty(c => c.RequestBodySize, requestBodySize)
             .SetProperty(c => c.ResponseBodySize, responseBodySize)
             .SetProperty(c => c.StatusMessage, statusMessage)
-            .SetProperty(c => c.TlsMetadataJson, tlsMetadataJson), ct);
+            .SetProperty(c => c.TlsMetadataJson, tlsMetadataJson), ct) > 0;
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {

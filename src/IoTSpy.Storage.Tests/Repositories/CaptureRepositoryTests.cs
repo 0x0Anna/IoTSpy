@@ -225,8 +225,8 @@ public class CaptureRepositoryTests : IDisposable
         var repo = new CaptureRepository(_db);
         var capture = await repo.AddAsync(MakeCapture("telemetry.example.net", "CONNECT", 0), ct);
 
-        await repo.UpdateTrafficStatsAsync(capture.Id, 7250, 9100, 10500,
-            "passthrough: auto (2 connections)", "{\"ConnectionCount\":2}", ct);
+        Assert.True(await repo.UpdateTrafficStatsAsync(capture.Id, 7250, 9100, 10500,
+            "passthrough: auto (2 connections)", "{\"ConnectionCount\":2}", ct));
 
         var loaded = await repo.GetByIdAsync(capture.Id, ct);
         Assert.NotNull(loaded);
@@ -237,5 +237,12 @@ public class CaptureRepositoryTests : IDisposable
         Assert.Equal("{\"ConnectionCount\":2}", loaded.TlsMetadataJson);
         Assert.Equal("telemetry.example.net", loaded.Host);
         Assert.Equal("CONNECT", loaded.Method);
+    }
+
+    [Fact]
+    public async Task UpdateTrafficStatsAsync_DeletedCapture_ReturnsFalse()
+    {
+        var repo = new CaptureRepository(_db);
+        Assert.False(await repo.UpdateTrafficStatsAsync(Guid.NewGuid(), 1, 1, 1, "", "{}", TestContext.Current.CancellationToken));
     }
 }
