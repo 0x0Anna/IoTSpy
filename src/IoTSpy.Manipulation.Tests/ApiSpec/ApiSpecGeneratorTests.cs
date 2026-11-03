@@ -14,6 +14,10 @@ public class ApiSpecGeneratorTests
     [InlineData("/api/users", "/api/users")]
     [InlineData("/", "/")]
     [InlineData("", "/")]
+    // Negative signed-64-bit ids, as some vendor APIs use.
+    [InlineData("/rest/devices/-9223372036854775001/settings", "/rest/devices/{id}/settings")]
+    [InlineData("/rest/accounts/-9223372036854775002/users/-9223372036854775003/preferences",
+        "/rest/accounts/{id}/users/{id}/preferences")]
     public void NormalizePath_DetectsNumericSegments(string input, string expected)
     {
         var result = ApiSpecGenerator.NormalizePath(input);
