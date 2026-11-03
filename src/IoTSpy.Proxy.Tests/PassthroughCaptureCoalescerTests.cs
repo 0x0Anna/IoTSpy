@@ -127,4 +127,18 @@ public class PassthroughCaptureCoalescerTests
         Assert.True(isNew);
         Assert.NotSame(first, next);
     }
+
+    [Fact]
+    public void HoldSummary_ReportsGiveUpsAndOutcomes()
+    {
+        var c = new PassthroughCaptureCoalescer(new FakeTimeProvider());
+        var (group, _) = c.Join(DeviceIp, Telemetry, 443, PassthroughCaptureCoalescer.Delayed);
+        Assert.Equal("", group.HoldSummary());
+
+        group.RecordHold(10_000, clientGaveUp: true, then: "relayed");
+        group.RecordHold(20_000, clientGaveUp: true, then: "relayed");
+        group.RecordHold(30_000, clientGaveUp: false, then: "relayed");
+
+        Assert.Equal("2 gave up after 15.0s avg; 1 waited, then relayed", group.HoldSummary());
+    }
 }

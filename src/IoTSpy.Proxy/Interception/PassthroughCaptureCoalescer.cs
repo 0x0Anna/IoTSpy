@@ -19,6 +19,7 @@ public sealed class PassthroughCaptureCoalescer(TimeProvider time)
 {
     public const string Passthrough = "passthrough";
     public const string Dropped = "dropped";
+    public const string Delayed = "delayed";
 
     internal static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
     private const int MaxTrackedGroups = 10_000;
@@ -95,6 +96,42 @@ public sealed class PassthroughCaptureCoalescer(TimeProvider time)
         /// connection starts a fresh group, so the traffic shows up again straight away instead of
         /// being folded into a row that no longer exists until the window ends.</summary>
         public void RowDeleted() { lock (_lock) Abandoned = true; }
+
+        private int _gaveUp;
+        private long _gaveUpWaitMs;
+        private readonly Dictionary<string, int> _heldThen = new();
+
+        /// <summary>Records how a held (delayed) connection ended: the client hung up after
+        /// <paramref name="waitedMs"/>, or it waited out the hold and was then handled as
+        /// <paramref name="then"/> (e.g. "relayed", "dropped").</summary>
+        public void RecordHold(long waitedMs, bool clientGaveUp, string then)
+        {
+            lock (_lock)
+            {
+                if (clientGaveUp)
+                {
+                    _gaveUp++;
+                    _gaveUpWaitMs += waitedMs;
+                }
+                else
+                {
+                    _heldThen[then] = _heldThen.GetValueOrDefault(then) + 1;
+                }
+            }
+        }
+
+        /// <summary>e.g. "41 gave up after 14.8s avg; 3 waited, then relayed", or empty if no holds.</summary>
+        public string HoldSummary()
+        {
+            lock (_lock)
+            {
+                var parts = new List<string>();
+                if (_gaveUp > 0)
+                    parts.Add($"{_gaveUp} gave up after {_gaveUpWaitMs / 1000.0 / _gaveUp:0.0}s avg");
+                parts.AddRange(_heldThen.OrderBy(kv => kv.Key).Select(kv => $"{kv.Value} waited, then {kv.Key}"));
+                return string.Join("; ", parts);
+            }
+        }
 
         /// <summary>Adds a finished connection's traffic and returns the group's running totals.</summary>
         public PassthroughTotals Complete(long clientToServer, long serverToClient, DateTimeOffset ended)

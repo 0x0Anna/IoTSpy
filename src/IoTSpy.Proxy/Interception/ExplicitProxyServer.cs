@@ -173,8 +173,13 @@ public class ExplicitProxyServer(
             if (string.IsNullOrEmpty(line)) break;
         }
 
-        // A Drop rule matching the tunnel itself (CONNECT host:port) refuses it outright.
-        if (await manipulationService.FindConnectionDropRuleAsync(host, port, ct) is { } dropRule)
+        // Drop/Delay rules matching the tunnel itself (CONNECT host:port): delay answering it, and/or
+        // refuse it outright. Delay applies only to tunnels relayed untouched; intercepted HTTP
+        // gets the Delay per request instead.
+        var connRules = await manipulationService.MatchConnectionRulesAsync(host, port, ct);
+        if (!settings.CaptureTls && connRules.TotalDelayMs > 0)
+            await Task.Delay(connRules.TotalDelayMs, ct);
+        if (connRules.Drop is { } dropRule)
         {
             logger.LogDebug("CONNECT {ClientIp}→{Host}:{Port} dropped by rule '{RuleName}'", clientIp, host, port, dropRule.Name);
             await clientStream.WriteAsync("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray(), ct);

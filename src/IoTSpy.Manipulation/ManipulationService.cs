@@ -22,23 +22,26 @@ public class ManipulationService(
 {
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runningFuzzers = new();
 
-    public async Task<ManipulationRule?> FindConnectionDropRuleAsync(string host, int port, CancellationToken ct = default)
+    public async Task<ConnectionRuleMatch> MatchConnectionRulesAsync(string host, int port, CancellationToken ct = default)
     {
         var rules = await ruleCache.GetEnabledAsync(ct);
-        if (rules.Count == 0) return null;
+        if (rules.Count == 0) return ConnectionRuleMatch.None;
 
         var connection = new HttpMessage
         {
             Method = "CONNECT", Host = host, Port = port, Path = "/", Scheme = "tls",
             RequestLine = $"CONNECT {host}:{port} HTTP/1.1"
         };
-        var rule = RulesEngine.FindConnectionDropRule(rules, connection);
-        if (rule is null) return null;
+        var match = RulesEngine.MatchConnectionRules(rules, connection);
 
-        ManipulationMetrics.RecordRuleMatch(rule.Id);
-        if (rule.AlertOnMatch)
-            await SafeAlertAsync($"Rule '{rule.Name}' fired", $"Dropped connection to {host}:{port}", ct);
-        return rule;
+        foreach (var rule in match.Delays.Append(match.Drop).OfType<ManipulationRule>())
+        {
+            ManipulationMetrics.RecordRuleMatch(rule.Id);
+            if (rule.AlertOnMatch)
+                await SafeAlertAsync($"Rule '{rule.Name}' fired",
+                    $"{(rule.Action == ManipulationRuleAction.Drop ? "Dropped" : "Delayed")} connection to {host}:{port}", ct);
+        }
+        return match;
     }
 
     public async Task<bool> ApplyAsync(HttpMessage message, ManipulationPhase phase, CancellationToken ct = default)

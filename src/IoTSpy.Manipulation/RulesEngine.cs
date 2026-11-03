@@ -45,13 +45,24 @@ public class RulesEngine(ILogger<RulesEngine> logger)
     }
 
     /// <summary>
-    /// First request-phase Drop rule (in priority order) matching a connection described as a
-    /// CONNECT message. Chained rules never match here: no other rule has run on the connection.
+    /// Request-phase Delay rules (in priority order) matching a connection described as a CONNECT
+    /// message, up to the first matching Drop rule. Chained rules never match here: no other rule
+    /// has run on the connection.
     /// </summary>
-    internal static ManipulationRule? FindConnectionDropRule(IReadOnlyList<ManipulationRule> rules, HttpMessage connection) =>
-        rules.FirstOrDefault(r => r.Phase == ManipulationPhase.Request
-                                  && r.Action == ManipulationRuleAction.Drop
-                                  && Matches(r, connection));
+    internal static ConnectionRuleMatch MatchConnectionRules(IReadOnlyList<ManipulationRule> rules, HttpMessage connection)
+    {
+        var delays = new List<ManipulationRule>();
+        foreach (var rule in rules)
+        {
+            if (rule.Phase != ManipulationPhase.Request) continue;
+            if (rule.Action is not (ManipulationRuleAction.Drop or ManipulationRuleAction.Delay)) continue;
+            if (!Matches(rule, connection)) continue;
+
+            if (rule.Action == ManipulationRuleAction.Drop) return new ConnectionRuleMatch(delays, rule);
+            if (rule.DelayMs is > 0) delays.Add(rule);
+        }
+        return delays.Count == 0 ? ConnectionRuleMatch.None : new ConnectionRuleMatch(delays, null);
+    }
 
     internal static bool Matches(ManipulationRule rule, HttpMessage message)
     {

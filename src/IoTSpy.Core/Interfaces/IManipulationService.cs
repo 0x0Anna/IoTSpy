@@ -17,13 +17,12 @@ public interface IManipulationService
 
     /// <summary>
     /// Connection-level rule check for traffic the HTTP pipeline never sees — TLS that is relayed
-    /// untouched (passthrough) or whose handshake fails. Matches enabled request-phase
-    /// <see cref="ManipulationRuleAction.Drop"/> rules against the connection as
-    /// <c>CONNECT host:port</c> with path <c>/</c>, so a Drop rule with only a host pattern (or a
-    /// method pattern of <c>CONNECT</c>) blocks the connection before any handshake. Returns the
-    /// first matching rule in priority order, or null to let the connection proceed.
+    /// untouched (passthrough) or whose handshake fails. Matches enabled request-phase Drop and
+    /// Delay rules against the connection as <c>CONNECT host:port</c> with path <c>/</c>, so a rule
+    /// with only a host pattern (or a method pattern of <c>CONNECT</c>) applies to the connection.
+    /// Returns the matching Delay rules in priority order up to the first matching Drop rule.
     /// </summary>
-    Task<ManipulationRule?> FindConnectionDropRuleAsync(string host, int port, CancellationToken ct = default);
+    Task<ConnectionRuleMatch> MatchConnectionRulesAsync(string host, int port, CancellationToken ct = default);
 
     /// <summary>
     /// Replay a captured request (optionally modified) and return the session with the response.

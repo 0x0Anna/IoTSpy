@@ -355,4 +355,18 @@ public class PrefixedStreamTests
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) { }
     }
+
+    [Fact]
+    public void HasRecentFailures_TracksFailuresWithinWindow()
+    {
+        var time = new FakeTimeProvider();
+        var policy = new TlsInterceptionPolicy(time);
+        Assert.False(policy.HasRecentFailures("192.0.2.204", "api.example.com"));
+
+        policy.RecordHandshakeFailure("192.0.2.204", "api.example.com");
+        Assert.True(policy.HasRecentFailures("192.0.2.204", "API.EXAMPLE.com."));
+
+        time.Advance(TlsInterceptionPolicy.FailureWindow + TimeSpan.FromSeconds(1));
+        Assert.False(policy.HasRecentFailures("192.0.2.204", "api.example.com"));
+    }
 }
