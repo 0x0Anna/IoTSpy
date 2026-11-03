@@ -1042,6 +1042,9 @@ namespace IoTSpy.Storage.Migrations
                     b.Property<int?>("OverrideStatusCode")
                         .HasColumnType("INTEGER");
 
+                    b.Property<Guid?>("ParentRuleId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("PathPattern")
                         .HasColumnType("TEXT");
 
@@ -1049,6 +1052,15 @@ namespace IoTSpy.Storage.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Priority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RewriteHost")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RewritePath")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RewritePort")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("UpdatedAt")
@@ -1319,6 +1331,9 @@ namespace IoTSpy.Storage.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AutoPassthroughOnTlsFailure")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("AutoStart")
                         .HasColumnType("INTEGER");
 
@@ -1378,6 +1393,10 @@ namespace IoTSpy.Storage.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("TargetDeviceIp")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TlsPassthroughHosts")
                         .IsRequired()
                         .HasColumnType("TEXT");
 

@@ -263,9 +263,14 @@ public class ExplicitProxyServer(
         // by an immediately-empty read after writing, discard it, and retry once on a fresh
         // checkout before giving up.
         async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
-            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod)
+            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod,
+            string? targetHost = null, int? targetPort = null)
         {
-            var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+            // targetHost/targetPort differ from the connection's host/port only when a
+            // RewriteUrl manipulation rule redirected this one request elsewhere.
+            var uHost = targetHost ?? host;
+            var uPort = targetPort ?? port;
+            var upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
             try
             {
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
@@ -274,9 +279,9 @@ public class ExplicitProxyServer(
                 {
                     logger.LogInformation(
                         "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
-                        host, port, wReqLine);
+                        uHost, uPort, wReqLine);
                     connectionPool.Discard(upstream);
-                    upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                    upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
                     await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
                     result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true, requestMethod: wMethod);
                 }
@@ -411,6 +416,15 @@ public class ExplicitProxyServer(
             // Phase 4: Apply request-phase manipulation rules
             var manipModified = await manipulationService.ApplyAsync(httpMsg, ManipulationPhase.Request, ct);
             if (manipModified) modified = true;
+
+            // A RewriteUrl rule (or a script) may have retargeted this request; honour it for
+            // this request only — the connection's own host/port stay as they were.
+            var upstreamHost = string.IsNullOrWhiteSpace(httpMsg.Host) ? host : httpMsg.Host;
+            var upstreamPort = httpMsg.Port > 0 ? httpMsg.Port : port;
+            if (upstreamHost != host || upstreamPort != port)
+                logger.LogDebug("Request rewritten {FromHost}:{FromPort} → {ToHost}:{ToPort}",
+                    host, port, upstreamHost, upstreamPort);
+
             if (modified)
             {
                 reqLine = httpMsg.RequestLine;
@@ -427,7 +441,7 @@ public class ExplicitProxyServer(
             try
             {
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method);
+                (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method, upstreamHost, upstreamPort);
 
             // Decode Content-Encoding for storage (the original compressed bytes are still
             // forwarded to the client below — we only change what gets persisted in the DB)
@@ -508,7 +522,8 @@ public class ExplicitProxyServer(
                     {
                         respBody2 = httpMsg.ResponseBody;
                         respBodyBytes2 = Encoding.UTF8.GetBytes(respBody2);
-                        respHeaders2 = UpdateContentLength(respHeaders2, respBodyBytes2.Length);
+                        respHeaders2 = UpdateContentLength(respHeaders2, respBodyBytes2.Length,
+                            emitZero: !IsBodylessStatus(statusLine2) && !string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase));
                     }
                     else
                     {
@@ -531,16 +546,28 @@ public class ExplicitProxyServer(
             sw.Stop();
 
             // Forward response to client
+            // A client that hangs up mid-response (an app cancelling a download) makes this write
+            // throw. Previously that skipped recording entirely — the exchange happened upstream, so
+            // record it, then end the connection.
+            var clientAborted = false;
             if (statusLine2 is not null)
             {
-                if (httpMsg.ResponseBodySource is { } bodySrc)
+                try
                 {
-                    await WriteHttpHeadAsync(clientStream, statusLine2, respHeaders2, ct);
-                    await bodySrc.WriteToAsync(clientStream, ct);
+                    if (httpMsg.ResponseBodySource is { } bodySrc)
+                    {
+                        await WriteHttpHeadAsync(clientStream, statusLine2, respHeaders2, ct);
+                        await bodySrc.WriteToAsync(clientStream, ct);
+                    }
+                    else
+                    {
+                        await WriteHttpMessageAsync(clientStream, statusLine2, respHeaders2, respBodyBytes2, ct);
+                    }
                 }
-                else
+                catch (IOException) when (!ct.IsCancellationRequested)
                 {
-                    await WriteHttpMessageAsync(clientStream, statusLine2, respHeaders2, respBodyBytes2, ct);
+                    clientAborted = true;
+                    logger.LogDebug("Client {ClientIp} closed before the response from {Host}{Path} was delivered", clientIp, host, path);
                 }
             }
 
@@ -554,8 +581,8 @@ public class ExplicitProxyServer(
                 DeviceId = device?.Id,
                 Method = method,
                 Scheme = scheme,
-                Host = host,
-                Port = port,
+                Host = upstreamHost,
+                Port = upstreamPort,
                 Path = path,
                 Query = query,
                 RequestHeaders = reqHeaders,
@@ -621,13 +648,14 @@ public class ExplicitProxyServer(
             if (activeUpstream is not null)
             {
                 var activeReusable = IsConnectionReusable(statusLine2, respHeaders2);
-                if (activeReusable) connectionPool.Return(host, port, isTls, activeUpstream);
+                if (activeReusable) connectionPool.Return(upstreamHost, upstreamPort, isTls, activeUpstream);
                 else connectionPool.Discard(activeUpstream);
                 activeUpstreamReleased = true;
             }
 
             // HTTP/1.0 or Connection: close — stop after one exchange
-            if (respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
+            if (clientAborted ||
+                respHeaders2.Contains("Connection: close", StringComparison.OrdinalIgnoreCase) ||
                 (reqLine ?? "").EndsWith("HTTP/1.0"))
                 break;
             }
@@ -1266,12 +1294,17 @@ public class ExplicitProxyServer(
         return string.Join("\r\n", lines);
     }
 
-    private static string UpdateContentLength(string headers, int byteCount)
+    /// <param name="emitZero">When true, writes <c>Content-Length: 0</c> for an empty body
+    /// instead of omitting the header. Required for modified responses: without a length (or
+    /// chunked framing) a response body is close-delimited (RFC 9112 §6.3), so a keep-alive
+    /// client waits for a body that never comes. Requests keep the old behaviour — an absent
+    /// Content-Length already means "no body" there.</param>
+    internal static string UpdateContentLength(string headers, int byteCount, bool emitZero = false)
     {
         var lines = headers.Split("\r\n")
             .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        if (byteCount > 0)
+        if (byteCount > 0 || emitZero)
             lines.Add($"Content-Length: {byteCount}");
         return string.Join("\r\n", lines);
     }

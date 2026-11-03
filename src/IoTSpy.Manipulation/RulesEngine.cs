@@ -33,6 +33,7 @@ public class RulesEngine(ILogger<RulesEngine> logger)
             if (!Matches(rule, message))
                 continue;
 
+            message.MatchedRuleIds.Add(rule.Id);
             ManipulationMetrics.RecordRuleMatch(rule.Id);
             logger.LogDebug("Rule {RuleName} matched {Host}{Path}", rule.Name, message.Host, message.Path);
 
@@ -45,6 +46,10 @@ public class RulesEngine(ILogger<RulesEngine> logger)
 
     internal static bool Matches(ManipulationRule rule, HttpMessage message)
     {
+        // Chained rule: only fires when its parent already matched this exchange.
+        if (rule.ParentRuleId is { } parentId && !message.MatchedRuleIds.Contains(parentId))
+            return false;
+
         if (rule.HostPattern is not null && !GetRegex(rule.HostPattern, RegexOptions.IgnoreCase).IsMatch(message.Host))
             return false;
 
@@ -78,6 +83,12 @@ public class RulesEngine(ILogger<RulesEngine> logger)
                 }
                 return false;
 
+            case ManipulationRuleAction.RewriteUrl:
+                return phase == ManipulationPhase.Request && ApplyRewriteUrl(rule, message);
+
+            case ManipulationRuleAction.MatchOnly:
+                return false; // trigger for chained rules only
+
             case ManipulationRuleAction.Delay:
                 if (rule.DelayMs is > 0)
                     await Task.Delay(rule.DelayMs.Value, ct);
@@ -100,6 +111,81 @@ public class RulesEngine(ILogger<RulesEngine> logger)
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Rewrites host/port/path+query of the outgoing request. Each rewrite target is expanded
+    /// against the corresponding pattern's match (so "$1" etc. work); with no pattern it is used
+    /// literally. Keeps <see cref="HttpMessage.RequestLine"/> and the Host header consistent with
+    /// the new target — the proxy derives the upstream connection from Host/Port.
+    /// </summary>
+    internal static bool ApplyRewriteUrl(ManipulationRule rule, HttpMessage message)
+    {
+        if (string.IsNullOrEmpty(message.RequestLine)) return false; // dropped
+
+        var newHost = message.Host;
+        var newPort = message.Port;
+        var newPath = message.Path;
+        var newQuery = message.Query;
+
+        if (!string.IsNullOrWhiteSpace(rule.RewriteHost))
+            newHost = Expand(rule.HostPattern, message.Host, rule.RewriteHost.Trim());
+
+        if (rule.RewritePort is > 0 and <= 65535)
+            newPort = rule.RewritePort.Value;
+
+        if (!string.IsNullOrWhiteSpace(rule.RewritePath))
+        {
+            var target = Expand(rule.PathPattern, message.Path, rule.RewritePath.Trim());
+            var q = target.IndexOf('?');
+            if (q >= 0)
+            {
+                newPath = target[..q];
+                newQuery = target[(q + 1)..];
+            }
+            else
+            {
+                newPath = target;
+            }
+            if (!newPath.StartsWith('/')) newPath = "/" + newPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(newHost)) return false;
+
+        if (newHost == message.Host && newPort == message.Port && newPath == message.Path && newQuery == message.Query)
+            return false;
+
+        message.Host = newHost;
+        message.Port = newPort;
+        message.Path = newPath;
+        message.Query = newQuery;
+
+        var lastSpace = message.RequestLine.LastIndexOf(' ');
+        var version = lastSpace >= 0 ? message.RequestLine[(lastSpace + 1)..] : "HTTP/1.1";
+        message.RequestLine = $"{message.Method} {newPath}{(string.IsNullOrEmpty(newQuery) ? "" : "?" + newQuery)} {version}";
+
+        var defaultPort = message.Scheme == "https" ? 443 : 80;
+        var hostHeader = newPort == defaultPort || newPort == 0 ? newHost : $"{newHost}:{newPort}";
+        message.RequestHeaders = SetHeader(message.RequestHeaders, "Host", hostHeader);
+
+        return true;
+    }
+
+    private static string Expand(string? pattern, string input, string replacement)
+    {
+        if (string.IsNullOrEmpty(pattern)) return replacement;
+        var match = GetRegex(pattern, RegexOptions.IgnoreCase).Match(input);
+        return match.Success ? match.Result(replacement) : replacement;
+    }
+
+    private static string SetHeader(string headers, string name, string value)
+    {
+        var lines = headers.Split("\r\n").ToList();
+        var idx = lines.FindIndex(l => l.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0) lines[idx] = $"{name}: {value}";
+        else if (lines.Count > 0 && lines[0].Length == 0) lines[0] = $"{name}: {value}";
+        else lines.Insert(0, $"{name}: {value}");
+        return string.Join("\r\n", lines);
     }
 
     private static bool ApplyModifyHeader(ManipulationRule rule, HttpMessage message, ManipulationPhase phase)

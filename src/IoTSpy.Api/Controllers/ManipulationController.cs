@@ -69,8 +69,15 @@ public class ManipulationController(
             BodyReplaceWith = dto.BodyReplaceWith,
             OverrideStatusCode = dto.OverrideStatusCode,
             DelayMs = dto.DelayMs,
+            RewriteHost = dto.RewriteHost,
+            RewritePort = dto.RewritePort,
+            RewritePath = dto.RewritePath,
+            ParentRuleId = dto.ParentRuleId is { } p && p != Guid.Empty ? p : null,
             AlertOnMatch = dto.AlertOnMatch ?? false
         };
+
+        var validation = await ValidateRuleAsync(rule, default);
+        if (validation is not null) return BadRequest(new { error = validation });
 
         await rules.AddAsync(rule);
         ruleCache.Invalidate();
@@ -99,7 +106,16 @@ public class ManipulationController(
         rule.BodyReplaceWith = dto.BodyReplaceWith ?? rule.BodyReplaceWith;
         rule.OverrideStatusCode = dto.OverrideStatusCode ?? rule.OverrideStatusCode;
         rule.DelayMs = dto.DelayMs ?? rule.DelayMs;
+        rule.RewriteHost = dto.RewriteHost ?? rule.RewriteHost;
+        rule.RewritePort = dto.RewritePort ?? rule.RewritePort;
+        rule.RewritePath = dto.RewritePath ?? rule.RewritePath;
+        // Guid.Empty explicitly clears the chain (null means "leave unchanged", as elsewhere).
+        if (dto.ParentRuleId.HasValue)
+            rule.ParentRuleId = dto.ParentRuleId.Value == Guid.Empty ? null : dto.ParentRuleId.Value;
         if (dto.AlertOnMatch.HasValue) rule.AlertOnMatch = dto.AlertOnMatch.Value;
+
+        var validation = await ValidateRuleAsync(rule, ct);
+        if (validation is not null) return BadRequest(new { error = validation });
 
         await rules.UpdateAsync(rule, ct);
         ruleCache.Invalidate();
@@ -110,6 +126,35 @@ public class ManipulationController(
             OldValue = oldValue, NewValue = JsonSerializer.Serialize(rule), IpAddress = CurrentIp
         }, ct);
         return Ok(rule);
+    }
+
+    private async Task<string?> ValidateRuleAsync(ManipulationRule rule, CancellationToken ct)
+    {
+        if (rule.Action == ManipulationRuleAction.RewriteUrl)
+        {
+            if (rule.Phase != ManipulationPhase.Request)
+                return "RewriteUrl rules must use the Request phase.";
+            if (string.IsNullOrWhiteSpace(rule.RewriteHost) && rule.RewritePort is null && string.IsNullOrWhiteSpace(rule.RewritePath))
+                return "RewriteUrl requires at least one of rewriteHost, rewritePort or rewritePath.";
+            if (rule.RewritePort is < 1 or > 65535)
+                return "rewritePort must be between 1 and 65535.";
+            if (!string.IsNullOrWhiteSpace(rule.RewriteHost) && rule.RewriteHost.IndexOfAny([' ', '/', '\r', '\n']) >= 0)
+                return "rewriteHost must be a bare host name (no scheme, path or whitespace).";
+            if (!string.IsNullOrWhiteSpace(rule.RewritePath) && rule.RewritePath.IndexOfAny([' ', '\r', '\n']) >= 0)
+                return "rewritePath must not contain whitespace.";
+        }
+
+        if (rule.ParentRuleId is { } parentId)
+        {
+            if (parentId == rule.Id) return "A rule cannot be chained to itself.";
+            var parent = await rules.GetByIdAsync(parentId, ct);
+            if (parent is null) return $"Parent rule {parentId} not found.";
+            // A request-phase rule can't depend on a response-phase match that hasn't happened yet.
+            if (parent.Phase == ManipulationPhase.Response && rule.Phase == ManipulationPhase.Request)
+                return "A request-phase rule cannot be chained after a response-phase rule.";
+        }
+
+        return null;
     }
 
     [HttpDelete("rules/{id:guid}")]
@@ -124,6 +169,14 @@ public class ManipulationController(
                 OldValue = JsonSerializer.Serialize(rule), IpAddress = CurrentIp
             }, ct);
         await rules.DeleteAsync(id, ct);
+
+        // Unlink rules chained to the deleted one — otherwise they would silently never fire again.
+        foreach (var child in (await rules.GetAllAsync(ct)).Where(r => r.ParentRuleId == id))
+        {
+            child.ParentRuleId = null;
+            await rules.UpdateAsync(child, ct);
+        }
+
         ruleCache.Invalidate();
         return NoContent();
     }
@@ -258,10 +311,10 @@ public class ManipulationController(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
         pageSize = Math.Clamp(pageSize, 1, 200);
-        var itemsTask = replaySessions.GetAllAsync(page, pageSize, ct);
-        var totalTask = replaySessions.CountAsync(ct);
-        var items = await itemsTask;
-        var total = await totalTask;
+        // Sequential, not concurrent: both queries go through the same request-scoped DbContext,
+        // which rejects overlapping operations (#116).
+        var items = await replaySessions.GetAllAsync(page, pageSize, ct);
+        var total = await replaySessions.CountAsync(ct);
         return Ok(new { items, total, page, pageSize, pages = (int)Math.Ceiling(total / (double)pageSize) });
     }
 
@@ -470,9 +523,21 @@ public class ManipulationController(
     {
         int rulesImported = 0, bpsImported = 0, contentRulesImported = 0, specsImported = 0;
 
-        foreach (var r in dto.TrafficRules ?? [])
+        // IDs are regenerated on import, so chain links (ParentRuleId) are remapped to the
+        // new IDs; a parent that isn't part of the bundle drops the link rather than dangling.
+        var trafficRules = dto.TrafficRules ?? [];
+        var idMap = new Dictionary<Guid, Guid>();
+        foreach (var r in trafficRules) idMap.TryAdd(r.Id, Guid.NewGuid());
+        var assigned = new HashSet<Guid>();
+        foreach (var r in trafficRules)
         {
-            r.Id = Guid.NewGuid();
+            // Duplicate source IDs in a bundle: the first keeps the mapped ID, later ones get fresh IDs.
+            var mapped = idMap[r.Id];
+            r.Id = assigned.Add(mapped) ? mapped : Guid.NewGuid();
+            r.ParentRuleId = r.ParentRuleId is { } p && idMap.TryGetValue(p, out var np) ? np : null;
+        }
+        foreach (var r in trafficRules)
+        {
             await rules.AddAsync(r, ct);
             rulesImported++;
         }
@@ -554,7 +619,11 @@ public record CreateRuleDto(
     string? BodyReplaceWith = null,
     int? OverrideStatusCode = null,
     int? DelayMs = null,
-    bool? AlertOnMatch = null
+    bool? AlertOnMatch = null,
+    string? RewriteHost = null,
+    int? RewritePort = null,
+    string? RewritePath = null,
+    Guid? ParentRuleId = null
 );
 
 public record UpdateRuleDto(
@@ -572,7 +641,11 @@ public record UpdateRuleDto(
     string? BodyReplaceWith = null,
     int? OverrideStatusCode = null,
     int? DelayMs = null,
-    bool? AlertOnMatch = null
+    bool? AlertOnMatch = null,
+    string? RewriteHost = null,
+    int? RewritePort = null,
+    string? RewritePath = null,
+    Guid? ParentRuleId = null
 );
 
 public record CreateBreakpointDto(

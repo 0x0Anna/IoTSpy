@@ -84,6 +84,7 @@ public static class TlsClientHelloParser
         var ellipticCurves = new List<ushort>();
         var ecPointFormats = new List<byte>();
         string sniHostname = string.Empty;
+        var alpnProtocols = new List<string>();
 
         if (pos + 2 <= hello.Length)
         {
@@ -113,6 +114,9 @@ public static class TlsClientHelloParser
                     case 0x000B: // ec_point_formats
                         ecPointFormats = ParseByteList(extData);
                         break;
+                    case 0x0010: // application_layer_protocol_negotiation (RFC 7301)
+                        alpnProtocols = ParseAlpn(extData);
+                        break;
                 }
 
                 pos += extLen;
@@ -138,10 +142,29 @@ public static class TlsClientHelloParser
             EllipticCurves = ellipticCurves,
             EcPointFormats = ecPointFormats,
             Ja3Raw = ja3Raw,
-            Ja3Hash = ja3Hash
+            Ja3Hash = ja3Hash,
+            AlpnProtocols = alpnProtocols
         };
 
         return true;
+    }
+
+    // ProtocolNameList: uint16 total length, then (uint8 length, bytes) entries.
+    private static List<string> ParseAlpn(ReadOnlySpan<byte> data)
+    {
+        var result = new List<string>();
+        if (data.Length < 2) return result;
+        var listLen = Math.Min(BinaryPrimitives.ReadUInt16BigEndian(data), data.Length - 2);
+        var list = data.Slice(2, listLen);
+        var pos = 0;
+        while (pos < list.Length)
+        {
+            var len = list[pos++];
+            if (len == 0 || pos + len > list.Length) break;
+            result.Add(Encoding.ASCII.GetString(list.Slice(pos, len)));
+            pos += len;
+        }
+        return result;
     }
 
     /// <summary>
@@ -218,4 +241,7 @@ public record ClientHelloInfo
     public List<byte> EcPointFormats { get; init; } = [];
     public string Ja3Raw { get; init; } = string.Empty;
     public string Ja3Hash { get; init; } = string.Empty;
+    /// <summary>ALPN protocol names offered by the client, in preference order. Empty when the
+    /// client sent no ALPN extension.</summary>
+    public List<string> AlpnProtocols { get; init; } = [];
 }
