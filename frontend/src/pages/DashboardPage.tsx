@@ -18,7 +18,7 @@ import ErrorBoundary from '../components/common/ErrorBoundary'
 import DisconnectBanner from '../components/common/DisconnectBanner'
 import AlertToastStack from '../components/common/AlertToastStack'
 import { useProxy } from '../hooks/useProxy'
-import { useCaptures } from '../hooks/useCaptures'
+import { useCaptures, captureMatchesFilters } from '../hooks/useCaptures'
 import { useDevices } from '../hooks/useDevices'
 import { useTrafficStream } from '../hooks/useTrafficStream'
 import { useTheme } from '../hooks/useTheme'
@@ -68,10 +68,12 @@ export default function DashboardPage() {
     loadMore,
     prependCapture,
   } = useCaptures(filters)
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
 
   const handleCapture = useCallback((event: Parameters<typeof prependCapture>[0]) => {
     if (frozenRef.current) {
-      setPendingCount(c => c + 1)
+      if (captureMatchesFilters(event, filtersRef.current)) setPendingCount(c => c + 1)
     } else {
       prependCapture(event)
     }

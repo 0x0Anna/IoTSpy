@@ -7,6 +7,26 @@ import type { CaptureListResponse } from '../types/api'
 const PAGE_SIZE = 50
 const LIVE_CAP = 500
 
+/**
+ * Whether a live-streamed capture belongs in a list loaded with `filters`. The hub sends every
+ * capture to every client, so the list has to apply its own filters to live events, mirroring
+ * the server's `CaptureRepository.ApplyFilter`: host and client IP are substring matches, method
+ * and status are exact. A body search (`q`) can't be checked against a live event, which carries
+ * no bodies, so live events are held back while one is active and show up on the next refetch.
+ */
+export function captureMatchesFilters(event: TrafficCaptureEvent, filters: CaptureFilters): boolean {
+  if (filters.q) return false
+  if (filters.deviceId && event.deviceId !== filters.deviceId) return false
+  if (filters.host && !event.host.includes(filters.host)) return false
+  if (filters.method && event.method !== filters.method.toUpperCase()) return false
+  if (filters.statusCode != null && event.statusCode !== filters.statusCode) return false
+  if (filters.clientIp && !event.clientIp.includes(filters.clientIp)) return false
+  const ts = Date.parse(event.timestamp)
+  if (filters.from && ts < Date.parse(filters.from)) return false
+  if (filters.to && ts > Date.parse(filters.to)) return false
+  return true
+}
+
 export function useCaptures(filters: CaptureFilters) {
   const queryClient = useQueryClient()
   const filtersKey = JSON.stringify(filters)
@@ -35,6 +55,7 @@ export function useCaptures(filters: CaptureFilters) {
 
   const prependCapture = useCallback(
     (event: TrafficCaptureEvent) => {
+      if (!captureMatchesFilters(event, filters)) return
       const partial: CapturedRequestSummary = {
         ...event,
         requestHeaders: '',
