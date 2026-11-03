@@ -447,9 +447,14 @@ public class TransparentProxyServer(
         var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
 
         async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
-            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod)
+            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod,
+            string? targetHost = null, int? targetPort = null)
         {
-            var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+            // targetHost/targetPort differ from the connection's host/port only when a
+            // RewriteUrl manipulation rule redirected this one request elsewhere.
+            var uHost = targetHost ?? host;
+            var uPort = targetPort ?? port;
+            var upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
             try
             {
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
@@ -458,9 +463,9 @@ public class TransparentProxyServer(
                 {
                     logger.LogInformation(
                         "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
-                        host, port, wReqLine);
+                        uHost, uPort, wReqLine);
                     connectionPool.Discard(upstream);
-                    upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                    upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
                     await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
                     result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true, requestMethod: wMethod);
                 }
@@ -507,6 +512,20 @@ public class TransparentProxyServer(
             var manipModified = await manipulationService.ApplyAsync(httpMsg, ManipulationPhase.Request, ct);
             if (manipModified) modified = true;
 
+            // A RewriteUrl rule (or a script) may have retargeted this request. Only switch the
+            // upstream when the target actually changed — otherwise keep connecting to the
+            // original destination (`host` may be the SO_ORIGINAL_DST IP, not the name).
+            var rewritten = !string.IsNullOrWhiteSpace(httpMsg.Host) &&
+                            (httpMsg.Host != captureHost || (httpMsg.Port > 0 && httpMsg.Port != port));
+            var upstreamHost = rewritten ? httpMsg.Host : host;
+            var upstreamPort = rewritten && httpMsg.Port > 0 ? httpMsg.Port : port;
+            if (rewritten)
+            {
+                logger.LogDebug("Request rewritten {FromHost}:{FromPort} → {ToHost}:{ToPort}",
+                    captureHost, port, upstreamHost, upstreamPort);
+                captureHost = upstreamHost;
+            }
+
             if (modified)
             {
                 reqLine = httpMsg.RequestLine;
@@ -522,7 +541,7 @@ public class TransparentProxyServer(
             try
             {
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method);
+                (statusLine, respHeaders, respBody, respBodyBytes, transparentUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method, upstreamHost, upstreamPort);
 
             // Decode Content-Encoding for storage (original compressed bytes still forwarded to client)
             if (respBodyBytes.Length > 0)
@@ -624,7 +643,7 @@ public class TransparentProxyServer(
                 Method = method,
                 Scheme = scheme,
                 Host = captureHost,
-                Port = port,
+                Port = upstreamPort,
                 Path = path,
                 Query = query,
                 RequestHeaders = reqHeaders,
@@ -691,7 +710,7 @@ public class TransparentProxyServer(
             if (transparentUpstream is not null)
             {
                 var transparentReusable = IsConnectionReusable(statusLine, respHeaders);
-                if (transparentReusable) connectionPool.Return(host, port, isTls, transparentUpstream);
+                if (transparentReusable) connectionPool.Return(upstreamHost, upstreamPort, isTls, transparentUpstream);
                 else connectionPool.Discard(transparentUpstream);
                 transparentUpstreamReleased = true;
             }

@@ -1042,6 +1042,9 @@ namespace IoTSpy.Storage.Migrations
                     b.Property<int?>("OverrideStatusCode")
                         .HasColumnType("INTEGER");
 
+                    b.Property<Guid?>("ParentRuleId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("PathPattern")
                         .HasColumnType("TEXT");
 
@@ -1049,6 +1052,15 @@ namespace IoTSpy.Storage.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Priority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RewriteHost")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RewritePath")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RewritePort")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("UpdatedAt")

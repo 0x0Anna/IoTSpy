@@ -28,6 +28,18 @@ public class ManipulationRule
     public int? OverrideStatusCode { get; set; }
     public int? DelayMs { get; set; }           // for Delay action
 
+    // RewriteUrl parameters (null/blank = leave that component unchanged).
+    // Values may reference HostPattern/PathPattern capture groups ($1, ${name}).
+    public string? RewriteHost { get; set; }
+    public int? RewritePort { get; set; }
+    public string? RewritePath { get; set; }    // path, optionally with "?query"
+
+    /// <summary>Chaining: when set, this rule only fires for an exchange in which the
+    /// parent rule already matched (earlier in priority order, or in the request phase when
+    /// this is a response rule). Lets a response rule follow a request rule even after a
+    /// RewriteUrl has changed the host/path the response-phase patterns would see.</summary>
+    public Guid? ParentRuleId { get; set; }
+
     /// <summary>When true, fires an alert (via IAlertingService) each time this rule matches.
     /// Opt-in and defaults false — rules match on every proxied request, so alerting
     /// unconditionally would flood external channels (webhook/email/Slack/PagerDuty) on

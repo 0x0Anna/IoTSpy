@@ -179,6 +179,7 @@ public class ManipulationControllerTests
     {
         var id = Guid.NewGuid();
         var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetAllAsync(Arg.Any<CancellationToken>()).Returns(new List<ManipulationRule>());
         rules.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(MakeRule(id));
         var audit = Substitute.For<IAuditRepository>();
 
@@ -196,6 +197,7 @@ public class ManipulationControllerTests
     {
         var id = Guid.NewGuid();
         var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetAllAsync(Arg.Any<CancellationToken>()).Returns(new List<ManipulationRule>());
         rules.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns((ManipulationRule?)null);
 
         var result = await MakeController(rules).DeleteRule(id, TestContext.Current.CancellationToken);
@@ -491,5 +493,148 @@ public class ManipulationControllerTests
         var controller = MakeController();
         var result = await controller.GenerateAiMock(new AiMockGenerateDto("example.com", "GET", "/api/test"));
         Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    // ── RewriteUrl / chaining ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task CreateRule_RewriteUrl_PersistsRewriteFields()
+    {
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.AddAsync(Arg.Any<ManipulationRule>(), Arg.Any<CancellationToken>()).Returns(ci => ci.Arg<ManipulationRule>());
+
+        var dto = new CreateRuleDto("bing → www", ManipulationRuleAction.RewriteUrl,
+            HostPattern: @"^bing\.com$", RewriteHost: "www.bing.com");
+        var result = await MakeController(rules).CreateRule(dto);
+
+        Assert.IsType<CreatedAtActionResult>(result);
+        await rules.Received(1).AddAsync(
+            Arg.Is<ManipulationRule>(r => r.RewriteHost == "www.bing.com" && r.Action == ManipulationRuleAction.RewriteUrl),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CreateRule_RewriteUrlInResponsePhase_Returns400()
+    {
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        var dto = new CreateRuleDto("bad", ManipulationRuleAction.RewriteUrl,
+            Phase: ManipulationPhase.Response, RewriteHost: "www.bing.com");
+
+        var result = await MakeController(rules).CreateRule(dto);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        await rules.DidNotReceive().AddAsync(Arg.Any<ManipulationRule>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData("https://www.bing.com", null, null)]
+    [InlineData(null, 70000, null)]
+    [InlineData(null, null, "/a b")]
+    public async Task CreateRule_RewriteUrlInvalidTarget_Returns400(string? host, int? port, string? path)
+    {
+        var dto = new CreateRuleDto("bad", ManipulationRuleAction.RewriteUrl,
+            RewriteHost: host, RewritePort: port, RewritePath: path);
+
+        var result = await MakeController().CreateRule(dto);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task CreateRule_ParentNotFound_Returns400()
+    {
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((ManipulationRule?)null);
+        var dto = new CreateRuleDto("child", ManipulationRuleAction.ModifyHeader,
+            Phase: ManipulationPhase.Response, HeaderName: "X", HeaderValue: "1", ParentRuleId: Guid.NewGuid());
+
+        var result = await MakeController(rules).CreateRule(dto);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task CreateRule_RequestRuleChainedAfterResponseRule_Returns400()
+    {
+        var parent = MakeRule(Guid.NewGuid());
+        parent.Phase = ManipulationPhase.Response;
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetByIdAsync(parent.Id, Arg.Any<CancellationToken>()).Returns(parent);
+        var dto = new CreateRuleDto("child", ManipulationRuleAction.MatchOnly, ParentRuleId: parent.Id);
+
+        var result = await MakeController(rules).CreateRule(dto);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task CreateRule_ValidChain_PersistsParent()
+    {
+        var parent = MakeRule(Guid.NewGuid());
+        parent.Phase = ManipulationPhase.Request;
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetByIdAsync(parent.Id, Arg.Any<CancellationToken>()).Returns(parent);
+        rules.AddAsync(Arg.Any<ManipulationRule>(), Arg.Any<CancellationToken>()).Returns(ci => ci.Arg<ManipulationRule>());
+        var dto = new CreateRuleDto("child", ManipulationRuleAction.OverrideStatusCode,
+            Phase: ManipulationPhase.Response, OverrideStatusCode: 200, ParentRuleId: parent.Id);
+
+        var result = await MakeController(rules).CreateRule(dto);
+
+        Assert.IsType<CreatedAtActionResult>(result);
+        await rules.Received(1).AddAsync(Arg.Is<ManipulationRule>(r => r.ParentRuleId == parent.Id), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task UpdateRule_EmptyGuidParent_ClearsChain()
+    {
+        var id = Guid.NewGuid();
+        var rule = MakeRule(id);
+        rule.ParentRuleId = Guid.NewGuid();
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(rule);
+        rules.UpdateAsync(Arg.Any<ManipulationRule>(), Arg.Any<CancellationToken>()).Returns(ci => ci.Arg<ManipulationRule>());
+
+        var result = await MakeController(rules).UpdateRule(id, new UpdateRuleDto(ParentRuleId: Guid.Empty), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Null(rule.ParentRuleId);
+    }
+
+    [Fact]
+    public async Task DeleteRule_UnlinksChainedChildren()
+    {
+        var id = Guid.NewGuid();
+        var child = MakeRule(Guid.NewGuid());
+        child.ParentRuleId = id;
+        var unrelated = MakeRule(Guid.NewGuid());
+        var rules = Substitute.For<IManipulationRuleRepository>();
+        rules.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(MakeRule(id));
+        rules.GetAllAsync(Arg.Any<CancellationToken>()).Returns([child, unrelated]);
+
+        await MakeController(rules).DeleteRule(id, TestContext.Current.CancellationToken);
+
+        Assert.Null(child.ParentRuleId);
+        await rules.Received(1).UpdateAsync(child, Arg.Any<CancellationToken>());
+        await rules.DidNotReceive().UpdateAsync(unrelated, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ImportRuleset_RemapsParentRuleIdToNewIds()
+    {
+        var parent = MakeRule(Guid.NewGuid());
+        var child = MakeRule(Guid.NewGuid());
+        child.ParentRuleId = parent.Id;
+        var orphan = MakeRule(Guid.NewGuid());
+        orphan.ParentRuleId = Guid.NewGuid(); // parent not in bundle
+        var originalParentId = parent.Id;
+        var rules = Substitute.For<IManipulationRuleRepository>();
+
+        await MakeController(rules).ImportRuleset(
+            new ImportRulesetDto(TrafficRules: [parent, child, orphan]), TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(originalParentId, parent.Id);
+        Assert.Equal(parent.Id, child.ParentRuleId);
+        Assert.Null(orphan.ParentRuleId);
     }
 }

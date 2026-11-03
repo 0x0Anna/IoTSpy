@@ -33,6 +33,13 @@ public class HttpMessage
     public bool WasModified { get; set; }
 
     /// <summary>
+    /// Ids of the manipulation rules that matched this exchange so far, across both phases.
+    /// The same instance flows from the request phase into the response phase, which is
+    /// what lets a chained rule (<see cref="ManipulationRule.ParentRuleId"/>) require its parent.
+    /// </summary>
+    public HashSet<Guid> MatchedRuleIds { get; } = [];
+
+    /// <summary>
     /// When set, the proxy writer uses this source to emit the response body and selected
     /// headers (Content-Type, Content-Length, Content-Range, etc.) instead of
     /// <see cref="ResponseBody"/>. Enables binary-safe replacement, HTTP range slicing,

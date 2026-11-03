@@ -414,9 +414,11 @@ export interface ScanScope {
 export type ManipulationRuleAction =
   | 'ModifyHeader'
   | 'ModifyBody'
-  | 'ModifyStatus'
+  | 'OverrideStatusCode'
   | 'Delay'
   | 'Drop'
+  | 'RewriteUrl'
+  | 'MatchOnly'
 
 export type ManipulationPhase = 'Request' | 'Response'
 
@@ -444,6 +446,11 @@ export interface ManipulationRule {
   bodyReplaceWith?: string
   overrideStatusCode?: number
   delayMs?: number
+  rewriteHost?: string
+  rewritePort?: number
+  rewritePath?: string
+  /** Chained rule: fires only when this parent rule matched the same exchange. */
+  parentRuleId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -523,6 +530,11 @@ export interface CreateManipulationRuleRequest {
   bodyReplaceWith?: string
   overrideStatusCode?: number
   delayMs?: number
+  rewriteHost?: string
+  rewritePort?: number
+  rewritePath?: string
+  /** Chained rule: fires only when this parent rule matched the same exchange. */
+  parentRuleId?: string | null
 }
 
 export interface UpdateManipulationRuleRequest extends CreateManipulationRuleRequest {

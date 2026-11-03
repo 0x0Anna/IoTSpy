@@ -263,9 +263,14 @@ public class ExplicitProxyServer(
         // by an immediately-empty read after writing, discard it, and retry once on a fresh
         // checkout before giving up.
         async Task<(string? firstLine, string headers, string body, byte[] bodyBytes, Stream upstream)> WriteAndReadWithRetryAsync(
-            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod)
+            string wReqLine, string wReqHeaders, byte[] wReqBodyBytes, string wMethod,
+            string? targetHost = null, int? targetPort = null)
         {
-            var upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+            // targetHost/targetPort differ from the connection's host/port only when a
+            // RewriteUrl manipulation rule redirected this one request elsewhere.
+            var uHost = targetHost ?? host;
+            var uPort = targetPort ?? port;
+            var upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
             try
             {
                 await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
@@ -274,9 +279,9 @@ public class ExplicitProxyServer(
                 {
                     logger.LogInformation(
                         "Stale pooled upstream connection to {Host}:{Port} detected, reconnecting and retrying {ReqLine}",
-                        host, port, wReqLine);
+                        uHost, uPort, wReqLine);
                     connectionPool.Discard(upstream);
-                    upstream = await connectionPool.CheckoutAsync(host, port, isTls, ct);
+                    upstream = await connectionPool.CheckoutAsync(uHost, uPort, isTls, ct);
                     await WriteHttpMessageAsync(upstream, wReqLine, wReqHeaders, wReqBodyBytes, ct);
                     result = await ReadHttpMessageAsync(upstream, settings.MaxBodySizeKb, ct, isResponse: true, requestMethod: wMethod);
                 }
@@ -411,6 +416,15 @@ public class ExplicitProxyServer(
             // Phase 4: Apply request-phase manipulation rules
             var manipModified = await manipulationService.ApplyAsync(httpMsg, ManipulationPhase.Request, ct);
             if (manipModified) modified = true;
+
+            // A RewriteUrl rule (or a script) may have retargeted this request; honour it for
+            // this request only — the connection's own host/port stay as they were.
+            var upstreamHost = string.IsNullOrWhiteSpace(httpMsg.Host) ? host : httpMsg.Host;
+            var upstreamPort = httpMsg.Port > 0 ? httpMsg.Port : port;
+            if (upstreamHost != host || upstreamPort != port)
+                logger.LogDebug("Request rewritten {FromHost}:{FromPort} → {ToHost}:{ToPort}",
+                    host, port, upstreamHost, upstreamPort);
+
             if (modified)
             {
                 reqLine = httpMsg.RequestLine;
@@ -427,7 +441,7 @@ public class ExplicitProxyServer(
             try
             {
             if (!string.IsNullOrEmpty(reqLine))
-                (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method);
+                (statusLine2, respHeaders2, respBody2, respBodyBytes2, activeUpstream) = await WriteAndReadWithRetryAsync(reqLine, reqHeaders, reqBodyBytes, method, upstreamHost, upstreamPort);
 
             // Decode Content-Encoding for storage (the original compressed bytes are still
             // forwarded to the client below — we only change what gets persisted in the DB)
@@ -554,8 +568,8 @@ public class ExplicitProxyServer(
                 DeviceId = device?.Id,
                 Method = method,
                 Scheme = scheme,
-                Host = host,
-                Port = port,
+                Host = upstreamHost,
+                Port = upstreamPort,
                 Path = path,
                 Query = query,
                 RequestHeaders = reqHeaders,
@@ -621,7 +635,7 @@ public class ExplicitProxyServer(
             if (activeUpstream is not null)
             {
                 var activeReusable = IsConnectionReusable(statusLine2, respHeaders2);
-                if (activeReusable) connectionPool.Return(host, port, isTls, activeUpstream);
+                if (activeReusable) connectionPool.Return(upstreamHost, upstreamPort, isTls, activeUpstream);
                 else connectionPool.Discard(activeUpstream);
                 activeUpstreamReleased = true;
             }

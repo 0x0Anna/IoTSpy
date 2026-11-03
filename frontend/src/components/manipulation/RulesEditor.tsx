@@ -18,8 +18,20 @@ interface Props {
   onDelete: (id: string) => void
 }
 
-const ACTIONS: ManipulationRuleAction[] = ['ModifyHeader', 'ModifyBody', 'ModifyStatus', 'Delay', 'Drop']
+const ACTIONS: ManipulationRuleAction[] = [
+  'ModifyHeader', 'ModifyBody', 'OverrideStatusCode', 'Delay', 'Drop', 'RewriteUrl', 'MatchOnly',
+]
+const ACTION_LABELS: Record<ManipulationRuleAction, string> = {
+  ModifyHeader: 'Modify header',
+  ModifyBody: 'Modify body',
+  OverrideStatusCode: 'Override status',
+  Delay: 'Delay',
+  Drop: 'Drop',
+  RewriteUrl: 'Rewrite URL',
+  MatchOnly: 'Match only (chain trigger)',
+}
 const PHASES: ManipulationPhase[] = ['Request', 'Response']
+const EMPTY_GUID = '00000000-0000-0000-0000-000000000000'
 
 const emptyForm: CreateManipulationRuleRequest = {
   name: '',
@@ -36,6 +48,10 @@ const emptyForm: CreateManipulationRuleRequest = {
   bodyReplaceWith: '',
   overrideStatusCode: undefined,
   delayMs: undefined,
+  rewriteHost: '',
+  rewritePort: undefined,
+  rewritePath: '',
+  parentRuleId: '',
 }
 
 export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDelete }: Props) {
@@ -64,6 +80,10 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
       bodyReplaceWith: rule.bodyReplaceWith ?? '',
       overrideStatusCode: rule.overrideStatusCode,
       delayMs: rule.delayMs,
+      rewriteHost: rule.rewriteHost ?? '',
+      rewritePort: rule.rewritePort,
+      rewritePath: rule.rewritePath ?? '',
+      parentRuleId: rule.parentRuleId ?? '',
     })
     setEditing(rule.id)
   }
@@ -75,14 +95,32 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
 
   const handleSave = async () => {
     if (!form.name.trim()) return
+    // RewriteUrl only makes sense before the request is forwarded.
+    const base: CreateManipulationRuleRequest = {
+      ...form,
+      phase: effectivePhase,
+      // The inputs display these defaults, so send them rather than leaving the rule a no-op.
+      overrideStatusCode: form.action === 'OverrideStatusCode' ? (form.overrideStatusCode ?? 200) : form.overrideStatusCode,
+      delayMs: form.action === 'Delay' ? (form.delayMs ?? 1000) : form.delayMs,
+    }
     if (editing === 'new') {
-      const result = await onAdd(form)
+      const result = await onAdd({ ...base, parentRuleId: base.parentRuleId || undefined })
       if (result) cancelEdit()
     } else if (editing) {
-      const result = await onEdit(editing, { ...form, id: editing } as UpdateManipulationRuleRequest)
+      // The API treats a missing parentRuleId as "unchanged"; the empty GUID clears it.
+      const result = await onEdit(editing, {
+        ...base, id: editing, parentRuleId: base.parentRuleId || EMPTY_GUID,
+      } as UpdateManipulationRuleRequest)
       if (result) cancelEdit()
     }
   }
+
+  // Candidate chain parents: any other rule, except response rules when this one is a
+  // request rule (a request rule can't wait on a response match that hasn't happened yet).
+  const effectivePhase: ManipulationPhase = form.action === 'RewriteUrl' ? 'Request' : (form.phase ?? 'Request')
+  const parentCandidates = rules.filter((r) =>
+    r.id !== editing && !(effectivePhase === 'Request' && r.phase === 'Response'))
+  const ruleName = (id?: string | null) => rules.find((r) => r.id === id)?.name
 
   // Keyboard shortcuts for the active form
   useEffect(() => {
@@ -156,7 +194,8 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
               Phase
               <select
                 className="manip-form__select"
-                value={form.phase}
+                value={form.action === 'RewriteUrl' ? 'Request' : form.phase}
+                disabled={form.action === 'RewriteUrl'}
                 onChange={(e) => updateField('phase', e.target.value as ManipulationPhase)}
               >
                 {PHASES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -169,7 +208,7 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
                 value={form.action}
                 onChange={(e) => updateField('action', e.target.value as ManipulationRuleAction)}
               >
-                {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                {ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)}
               </select>
             </label>
             <label className="manip-form__checkbox">
@@ -210,7 +249,69 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
                 placeholder="GET|POST"
               />
             </label>
+            <label className="manip-form__label">
+              Chain after
+              <select
+                className="manip-form__select"
+                value={form.parentRuleId ?? ''}
+                onChange={(e) => updateField('parentRuleId', e.target.value)}
+                aria-label="Chain after"
+                title="Only fire when the selected rule matched the same request/response exchange"
+              >
+                <option value="">— none —</option>
+                {parentCandidates.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name} ({r.phase} · {ACTION_LABELS[r.action] ?? r.action})</option>
+                ))}
+              </select>
+            </label>
           </div>
+
+          {(form.action === 'RewriteUrl') && (
+            <div className="manip-form__row">
+              <label className="manip-form__label">
+                Rewrite Host
+                <input
+                  className="manip-form__input"
+                  value={form.rewriteHost ?? ''}
+                  onChange={(e) => updateField('rewriteHost', e.target.value)}
+                  placeholder="www.bing.com  (or $1.example.com)"
+                />
+              </label>
+              <label className="manip-form__label">
+                Rewrite Port
+                <input
+                  className="manip-form__input manip-form__input--narrow"
+                  type="number"
+                  value={form.rewritePort ?? ''}
+                  onChange={(e) => updateField('rewritePort', e.target.value === '' ? undefined : Number(e.target.value))}
+                  min={1}
+                  max={65535}
+                  placeholder="keep"
+                />
+              </label>
+              <label className="manip-form__label">
+                Rewrite Path
+                <input
+                  className="manip-form__input"
+                  value={form.rewritePath ?? ''}
+                  onChange={(e) => updateField('rewritePath', e.target.value)}
+                  placeholder="/v2/$1?debug=1  (blank = keep)"
+                />
+              </label>
+              <span className="manip-form__hint">
+                $1, $2… refer to groups captured by the Host / Path patterns. Scheme (http/https) is not changed.
+              </span>
+            </div>
+          )}
+
+          {(form.action === 'MatchOnly') && (
+            <div className="manip-form__row">
+              <span className="manip-form__hint">
+                Changes nothing on its own. Create Response-phase rules with “Chain after” set to this rule
+                to modify the response of every request it matches.
+              </span>
+            </div>
+          )}
 
           {(form.action === 'ModifyHeader') && (
             <div className="manip-form__row">
@@ -258,7 +359,7 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
             </div>
           )}
 
-          {(form.action === 'ModifyStatus') && (
+          {(form.action === 'OverrideStatusCode') && (
             <div className="manip-form__row">
               <label className="manip-form__label">
                 Status Code
@@ -313,7 +414,7 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
             <div key={rule.id} className={`manip-row ${!rule.enabled ? 'manip-row--disabled' : ''}`}>
               <div className="manip-row__main">
                 <span className={`manip-badge manip-badge--${rule.action.toLowerCase()}`}>
-                  {rule.action}
+                  {ACTION_LABELS[rule.action] ?? rule.action}
                 </span>
                 <span className={`manip-phase manip-phase--${rule.phase.toLowerCase()}`}>
                   {rule.phase}
@@ -325,6 +426,16 @@ export default function RulesEditor({ rules, loading, error, onAdd, onEdit, onDe
                 {rule.hostPattern && <code className="manip-pattern">{rule.hostPattern}</code>}
                 {rule.pathPattern && <code className="manip-pattern">{rule.pathPattern}</code>}
                 {rule.methodPattern && <code className="manip-pattern">{rule.methodPattern}</code>}
+                {rule.action === 'RewriteUrl' && (
+                  <code className="manip-pattern">
+                    → {[rule.rewriteHost, rule.rewritePort && `:${rule.rewritePort}`, rule.rewritePath].filter(Boolean).join('')}
+                  </code>
+                )}
+                {rule.parentRuleId && (
+                  <span className="manip-pattern" title="Chained rule">
+                    ⛓ after {ruleName(rule.parentRuleId) ?? 'missing rule'}
+                  </span>
+                )}
               </div>
               <div className="manip-row__actions">
                 <button className="manip-btn manip-btn--small" onClick={() => startEdit(rule)}>

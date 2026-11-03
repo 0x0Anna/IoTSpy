@@ -425,4 +425,210 @@ public class RulesEngineTests
         Assert.Contains("X-Trace: 1", msg.RequestHeaders);
         Assert.Equal("password=***", msg.RequestBody);
     }
+
+    // ── RewriteUrl ───────────────────────────────────────────────────────────
+
+    private static HttpMessage MakeProxiedRequest(string host, string path = "/search", string query = "q=1",
+        string method = "GET", string scheme = "https", int port = 443) =>
+        new()
+        {
+            Method = method, Host = host, Port = port, Path = path, Query = query, Scheme = scheme,
+            RequestLine = $"{method} {path}{(query.Length > 0 ? "?" + query : "")} HTTP/1.1",
+            RequestHeaders = $"Host: {host}\r\nAccept: */*",
+        };
+
+    [Fact]
+    public async Task RewriteUrl_Host_UpdatesHostAndHostHeader_KeepsPathAndQuery()
+    {
+        var msg = MakeProxiedRequest("bing.com");
+        var rule = new ManipulationRule
+        {
+            HostPattern = @"^bing\.com$", Action = ManipulationRuleAction.RewriteUrl, RewriteHost = "www.bing.com"
+        };
+
+        var modified = await CreateEngine().ApplyRulesAsync(msg, ManipulationPhase.Request, [rule], TestContext.Current.CancellationToken);
+
+        Assert.True(modified);
+        Assert.Equal("www.bing.com", msg.Host);
+        Assert.Equal("GET /search?q=1 HTTP/1.1", msg.RequestLine);
+        Assert.Contains("Host: www.bing.com", msg.RequestHeaders);
+        Assert.DoesNotContain("Host: bing.com", msg.RequestHeaders);
+        Assert.Contains("Accept: */*", msg.RequestHeaders);
+    }
+
+    [Fact]
+    public async Task RewriteUrl_HostPatternNotMatching_DoesNothing()
+    {
+        var msg = MakeProxiedRequest("www.bing.com");
+        var rule = new ManipulationRule
+        {
+            HostPattern = @"^bing\.com$", Action = ManipulationRuleAction.RewriteUrl, RewriteHost = "www.bing.com"
+        };
+
+        var modified = await CreateEngine().ApplyRulesAsync(msg, ManipulationPhase.Request, [rule], TestContext.Current.CancellationToken);
+
+        Assert.False(modified);
+        Assert.Equal("www.bing.com", msg.Host);
+    }
+
+    [Fact]
+    public async Task RewriteUrl_ExpandsCaptureGroups_ForHostAndPath()
+    {
+        var msg = MakeProxiedRequest("api.example.com", path: "/v1/users/42", query: "");
+        var rule = new ManipulationRule
+        {
+            HostPattern = @"^(\w+)\.example\.com$",
+            PathPattern = @"^/v1/(.*)$",
+            Action = ManipulationRuleAction.RewriteUrl,
+            RewriteHost = "$1.staging.example.com",
+            RewritePath = "/v2/$1?debug=true"
+        };
+
+        await CreateEngine().ApplyRulesAsync(msg, ManipulationPhase.Request, [rule], TestContext.Current.CancellationToken);
+
+        Assert.Equal("api.staging.example.com", msg.Host);
+        Assert.Equal("/v2/users/42", msg.Path);
+        Assert.Equal("debug=true", msg.Query);
+        Assert.Equal("GET /v2/users/42?debug=true HTTP/1.1", msg.RequestLine);
+    }
+
+    [Fact]
+    public async Task RewriteUrl_NonDefaultPort_IncludedInHostHeader()
+    {
+        var msg = MakeProxiedRequest("example.com", scheme: "http", port: 80);
+        var rule = new ManipulationRule
+        {
+            Action = ManipulationRuleAction.RewriteUrl, RewriteHost = "localhost", RewritePort = 8080
+        };
+
+        await CreateEngine().ApplyRulesAsync(msg, ManipulationPhase.Request, [rule], TestContext.Current.CancellationToken);
+
+        Assert.Equal(8080, msg.Port);
+        Assert.Contains("Host: localhost:8080", msg.RequestHeaders);
+    }
+
+    [Fact]
+    public async Task RewriteUrl_InResponsePhase_IsIgnored()
+    {
+        var msg = MakeProxiedRequest("bing.com");
+        var rule = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, Action = ManipulationRuleAction.RewriteUrl, RewriteHost = "www.bing.com"
+        };
+
+        var modified = await CreateEngine().ApplyRulesAsync(msg, ManipulationPhase.Response, [rule], TestContext.Current.CancellationToken);
+
+        Assert.False(modified);
+        Assert.Equal("bing.com", msg.Host);
+    }
+
+    // ── Chaining ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ChainedResponseRule_FiresAfterParentRewrite_EvenThoughHostChanged()
+    {
+        var engine = CreateEngine();
+        var msg = MakeProxiedRequest("bing.com");
+        var rewrite = new ManipulationRule
+        {
+            HostPattern = @"^bing\.com$", Action = ManipulationRuleAction.RewriteUrl, RewriteHost = "www.bing.com"
+        };
+        // Same host pattern as the parent: would NOT match the rewritten host on its own.
+        var header = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, ParentRuleId = rewrite.Id,
+            Action = ManipulationRuleAction.ModifyHeader, HeaderName = "X-Rewritten", HeaderValue = "1"
+        };
+        IReadOnlyList<ManipulationRule> rules = [rewrite, header];
+
+        await engine.ApplyRulesAsync(msg, ManipulationPhase.Request, rules, TestContext.Current.CancellationToken);
+        msg.StatusLine = "HTTP/1.1 200 OK";
+        msg.ResponseHeaders = "Content-Type: text/html";
+        var modified = await engine.ApplyRulesAsync(msg, ManipulationPhase.Response, rules, TestContext.Current.CancellationToken);
+
+        Assert.True(modified);
+        Assert.Contains("X-Rewritten: 1", msg.ResponseHeaders);
+    }
+
+    [Fact]
+    public async Task ChainedRule_ParentDidNotMatch_DoesNotFire()
+    {
+        var engine = CreateEngine();
+        var msg = MakeProxiedRequest("duckduckgo.com");
+        var parent = new ManipulationRule
+        {
+            HostPattern = @"^bing\.com$", Action = ManipulationRuleAction.MatchOnly
+        };
+        var child = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, ParentRuleId = parent.Id,
+            Action = ManipulationRuleAction.ModifyHeader, HeaderName = "X-Hit", HeaderValue = "1"
+        };
+        IReadOnlyList<ManipulationRule> rules = [parent, child];
+
+        await engine.ApplyRulesAsync(msg, ManipulationPhase.Request, rules, TestContext.Current.CancellationToken);
+        msg.ResponseHeaders = "Content-Type: text/html";
+        var modified = await engine.ApplyRulesAsync(msg, ManipulationPhase.Response, rules, TestContext.Current.CancellationToken);
+
+        Assert.False(modified);
+        Assert.DoesNotContain("X-Hit", msg.ResponseHeaders);
+    }
+
+    [Fact]
+    public async Task MatchOnlyTrigger_ChainsStatusAndHeaderResponseRules()
+    {
+        // POST yandex.net/.*  →  response 200 + X-Custom-Header: MyValue
+        var engine = CreateEngine();
+        var msg = MakeProxiedRequest("mc.yandex.net", path: "/watch/123", query: "", method: "POST");
+        var trigger = new ManipulationRule
+        {
+            MethodPattern = "^POST$", HostPattern = @"yandex\.net$", PathPattern = "/.*",
+            Action = ManipulationRuleAction.MatchOnly
+        };
+        var status = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, ParentRuleId = trigger.Id,
+            Action = ManipulationRuleAction.OverrideStatusCode, OverrideStatusCode = 200
+        };
+        var header = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, ParentRuleId = trigger.Id,
+            Action = ManipulationRuleAction.ModifyHeader, HeaderName = "X-Custom-Header", HeaderValue = "MyValue"
+        };
+        IReadOnlyList<ManipulationRule> rules = [trigger, status, header];
+
+        var reqModified = await engine.ApplyRulesAsync(msg, ManipulationPhase.Request, rules, TestContext.Current.CancellationToken);
+        msg.StatusCode = 403;
+        msg.StatusLine = "HTTP/1.1 403 Forbidden";
+        msg.ResponseHeaders = "Content-Type: text/plain";
+        await engine.ApplyRulesAsync(msg, ManipulationPhase.Response, rules, TestContext.Current.CancellationToken);
+
+        Assert.False(reqModified); // MatchOnly changes nothing on the request
+        Assert.Contains(trigger.Id, msg.MatchedRuleIds);
+        Assert.Equal(200, msg.StatusCode);
+        Assert.Contains("X-Custom-Header: MyValue", msg.ResponseHeaders);
+    }
+
+    [Fact]
+    public async Task MatchOnlyTrigger_GetRequest_DoesNotTriggerChain()
+    {
+        var engine = CreateEngine();
+        var msg = MakeProxiedRequest("mc.yandex.net", method: "GET");
+        var trigger = new ManipulationRule
+        {
+            MethodPattern = "^POST$", HostPattern = @"yandex\.net$", Action = ManipulationRuleAction.MatchOnly
+        };
+        var header = new ManipulationRule
+        {
+            Phase = ManipulationPhase.Response, ParentRuleId = trigger.Id,
+            Action = ManipulationRuleAction.ModifyHeader, HeaderName = "X-Custom-Header", HeaderValue = "MyValue"
+        };
+        IReadOnlyList<ManipulationRule> rules = [trigger, header];
+
+        await engine.ApplyRulesAsync(msg, ManipulationPhase.Request, rules, TestContext.Current.CancellationToken);
+        msg.ResponseHeaders = "Content-Type: text/plain";
+        await engine.ApplyRulesAsync(msg, ManipulationPhase.Response, rules, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("X-Custom-Header", msg.ResponseHeaders);
+    }
 }
