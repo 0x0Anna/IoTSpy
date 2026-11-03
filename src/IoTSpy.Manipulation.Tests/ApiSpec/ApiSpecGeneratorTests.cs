@@ -14,6 +14,10 @@ public class ApiSpecGeneratorTests
     [InlineData("/api/users", "/api/users")]
     [InlineData("/", "/")]
     [InlineData("", "/")]
+    // Negative signed-64-bit ids, as used throughout the SleepIQ API.
+    [InlineData("/rest/bed/-9223372018926398631/pauseMode", "/rest/bed/{id}/pauseMode")]
+    [InlineData("/rest/accounts/-9223372018926499868/sleepers/-9223372018926095868/circadianRoutines",
+        "/rest/accounts/{id}/sleepers/{id}/circadianRoutines")]
     public void NormalizePath_DetectsNumericSegments(string input, string expected)
     {
         var result = ApiSpecGenerator.NormalizePath(input);

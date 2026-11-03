@@ -17,7 +17,8 @@ public sealed class ApiSpecGenerator(
     ILogger<ApiSpecGenerator> logger)
 {
     private static readonly Regex GuidSegment = new(@"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", RegexOptions.Compiled);
-    private static readonly Regex NumericSegment = new(@"^\d+$", RegexOptions.Compiled);
+    // Signed integers too: some APIs (e.g. SleepIQ) use negative 64-bit ids as path segments.
+    private static readonly Regex NumericSegment = new(@"^-?\d+$", RegexOptions.Compiled);
     private static readonly Regex HexSegment = new(@"^[0-9a-fA-F]{16,}$", RegexOptions.Compiled);
 
     public async Task<string> GenerateAsync(ApiSpecGenerationRequest request, CancellationToken ct = default)
