@@ -13,6 +13,7 @@ using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using IoTSpy.Protocols.Doh;
+using IoTSpy.Proxy.Passive;
 using IoTSpy.Proxy.Resilience;
 using IoTSpy.Proxy.Tls;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +47,7 @@ public class TransparentProxyServer(
     IProtocolMessageWriter protocolMessageWriter,
     TlsInterceptionPolicy tlsPolicy,
     PassthroughCaptureCoalescer passthroughCoalescer,
+    IPassiveProxyBuffer passiveBuffer,
     ILogger<TransparentProxyServer> logger)
 {
     private TcpListener? _listener;
@@ -151,7 +153,7 @@ public class TransparentProxyServer(
                             ? $"client sent nothing within {FirstReadTimeout.TotalSeconds:0}s (server-speaks-first protocol?)"
                             : $"not TLS (first bytes {Convert.ToHexString(helloBuf, 0, Math.Min(helloLen, 8))})";
                         logger.LogInformation("Raw TCP passthrough {ClientIp}→{Host}:{Port} — {Reason}", clientIp, host, destPort, why);
-                        await HandleRawPassthroughAsync(client, host, destPort, clientIp, scope, ct, helloBuf, helloLen, why);
+                        await HandleRawPassthroughAsync(client, host, destPort, clientIp, scope, ct, helloBuf, helloLen, why, settings.IsPassive);
                         return;
                     }
                     ClientHelloInfo? hello = TlsClientHelloParser.TryParse(helloBuf.AsSpan(0, helloLen), out var parsed) ? parsed : null;
@@ -164,7 +166,10 @@ public class TransparentProxyServer(
                     // Drop/Delay rules matching the connection (CONNECT sni:port) — the only way to
                     // act on traffic the HTTP pipeline never sees (passthrough, or a client that
                     // rejects the interception certificate).
-                    var connRules = await manipulationService.MatchConnectionRulesAsync(sniHost, destPort, ct);
+                    // Passive (observe-only) never acts on traffic, so no rule applies.
+                    var connRules = settings.IsPassive
+                        ? ConnectionRuleMatch.None
+                        : await manipulationService.MatchConnectionRulesAsync(sniHost, destPort, ct);
                     if (!connRules.IsEmpty)
                     {
                         // Delay only connections that won't reach the HTTP pipeline: intercepted
@@ -188,8 +193,11 @@ public class TransparentProxyServer(
                     if (verdict.Passthrough)
                     {
                         // Repeat connections to the same host share one capture row and log at
-                        // Debug; only the first in each window is logged at Information.
-                        var (group, isFirst) = passthroughCoalescer.Join(clientIp, sniHost, destPort);
+                        // Debug; only the first in each window is logged at Information. Passive
+                        // records every connection to the passive buffer, so there's no row to share.
+                        var (group, isFirst) = settings.IsPassive
+                            ? ((PassthroughCaptureCoalescer.Group?)null, true)
+                            : passthroughCoalescer.Join(clientIp, sniHost, destPort);
                         if (verdict.Reason.Length > 0)
                             logger.Log(isFirst ? LogLevel.Information : LogLevel.Debug,
                                 "TLS passthrough {ClientIp}→{SniHost}:{Port} — {Reason}",
@@ -197,11 +205,11 @@ public class TransparentProxyServer(
                         try
                         {
                             await HandleTlsPassthroughAsync(client, host, destPort, clientIp, scope, ct,
-                                helloBuf, helloLen, hello, verdict.Reason, group, isFirst);
+                                helloBuf, helloLen, hello, verdict.Reason, group, isFirst, settings.IsPassive);
                         }
                         finally
                         {
-                            if (isFirst && group.CaptureId is null) group.Abandon();
+                            if (isFirst && group is { CaptureId: null }) group.Abandon();
                         }
                     }
                     else
@@ -278,12 +286,49 @@ public class TransparentProxyServer(
         TcpClient client, string host, int port,
         string clientIp, ProxySettings settings, IServiceScope scope, CancellationToken ct)
     {
-        var clientStream = client.GetStream();
+        Stream clientStream = client.GetStream();
+
+        if (settings.IsPassive)
+        {
+            // Passive must let every device through untouched, but non-TLS ports carry more than
+            // HTTP (plain MQTT on 1883, proprietary protocols on 80) and the HTTP parser would stall
+            // or mangle those. Look at the opening bytes: HTTP goes through the observe-only HTTP
+            // path, anything else is relayed byte for byte (recorded as a tcp-passthrough).
+            var (firstBuf, firstLen, timedOut) = await ReadClientHelloAsync(clientStream, ct);
+            if (firstLen == 0 && !timedOut) return;
+            if (timedOut || !LooksLikeHttpRequest(firstBuf.AsSpan(0, firstLen)))
+            {
+                var why = timedOut
+                    ? $"client sent nothing within {FirstReadTimeout.TotalSeconds:0}s (server-speaks-first protocol?)"
+                    : $"not HTTP (first bytes {Convert.ToHexString(firstBuf, 0, Math.Min(firstLen, 8))})";
+                logger.LogDebug("Raw TCP passthrough {ClientIp}→{Host}:{Port} — {Reason}", clientIp, host, port, why);
+                await HandleRawPassthroughAsync(client, host, port, clientIp, scope, ct, firstBuf, firstLen, why, isPassive: true);
+                return;
+            }
+            clientStream = new PrefixedStream(firstBuf.AsMemory(0, firstLen), clientStream);
+        }
 
         // Upstream connections come from the shared pool (reused across every client
         // device, not just this one) rather than a dedicated connection opened per client.
         await InterceptHttpStreamAsync(clientStream, host, port, isTls: false, "http",
             string.Empty, string.Empty, clientIp, settings, scope, ct);
+    }
+
+    private static readonly string[] HttpMethods =
+        ["GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "OPTIONS ", "PATCH ", "TRACE ", "CONNECT "];
+
+    /// <summary>True when the opening bytes start with an HTTP/1.x request method and a space.</summary>
+    internal static bool LooksLikeHttpRequest(ReadOnlySpan<byte> data)
+    {
+        foreach (var m in HttpMethods)
+        {
+            var n = Math.Min(m.Length, data.Length);
+            var match = n > 0;
+            for (var i = 0; i < n && match; i++) match = data[i] == m[i];
+            // A short first read ("GE") can't rule HTTP out; treat a matching prefix as HTTP.
+            if (match) return true;
+        }
+        return false;
     }
 
     private async Task RecordHandshakeFailureAsync(
@@ -307,9 +352,9 @@ public class TransparentProxyServer(
 
         try
         {
-            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
-            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+            var device = settings.IsPassive
+                ? null
+                : await GetOrRegisterDeviceAsync(scope.ServiceProvider.GetRequiredService<IDeviceRepository>(), clientIp, ct);
             var capture = new CapturedRequest
             {
                 DeviceId = device?.Id,
@@ -325,7 +370,8 @@ public class TransparentProxyServer(
                 ClientIp = clientIp,
                 TlsMetadataJson = JsonSerializer.Serialize(HelloMetadata(hello, $"interception failed: {reason}"))
             };
-            await captures.AddAsync(capture, ct);
+            if (settings.IsPassive) passiveBuffer.Add(capture);
+            else await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().AddAsync(capture, ct);
             await publisher.PublishAsync(capture, ct);
         }
         catch (Exception recordEx) when (!ct.IsCancellationRequested)
@@ -519,7 +565,7 @@ public class TransparentProxyServer(
     /// </summary>
     private async Task HandleRawPassthroughAsync(
         TcpClient client, string host, int port, string clientIp, IServiceScope scope, CancellationToken ct,
-        byte[] initialBuf, int initialLen, string reason)
+        byte[] initialBuf, int initialLen, string reason, bool isPassive = false)
     {
         var started = DateTimeOffset.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -542,8 +588,9 @@ public class TransparentProxyServer(
 
             try
             {
-                var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
-                var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+                var device = isPassive
+                    ? null
+                    : await GetOrRegisterDeviceAsync(scope.ServiceProvider.GetRequiredService<IDeviceRepository>(), clientIp, ct);
                 capture = new CapturedRequest
                 {
                     DeviceId = device?.Id,
@@ -559,7 +606,9 @@ public class TransparentProxyServer(
                     // Keep the opening bytes (hex) to help identify the protocol later.
                     RequestBody = initialLen > 0 ? "hex:" + Convert.ToHexString(initialBuf, 0, Math.Min(initialLen, 256)) : string.Empty
                 };
-                await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().AddAsync(capture, ct);
+                // Passive: the buffer holds this same object, so the totals filled in at close show up there.
+                if (isPassive) passiveBuffer.Add(capture);
+                else await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().AddAsync(capture, ct);
                 await publisher.PublishAsync(capture, ct);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -579,8 +628,11 @@ public class TransparentProxyServer(
             capture.DurationMs = sw.ElapsedMilliseconds;
             capture.RequestBodySize = Interlocked.Read(ref clientToServer);
             capture.ResponseBodySize = Interlocked.Read(ref serverToClient);
-            try { await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().UpdateAsync(capture, CancellationToken.None); }
-            catch (Exception ex) { logger.LogWarning(ex, "Failed to update raw passthrough capture for {Host}:{Port}", host, port); }
+            if (!isPassive)
+            {
+                try { await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().UpdateAsync(capture, CancellationToken.None); }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to update raw passthrough capture for {Host}:{Port}", host, port); }
+            }
         }
 
         logger.LogInformation("Raw TCP passthrough complete: {ClientIp}→{Host}:{Port} Duration={DurationMs}ms C→S={C2S}B S→C={S2C}B",
@@ -593,9 +645,10 @@ public class TransparentProxyServer(
         TcpClient client, string host, int port,
         string clientIp, IServiceScope scope, CancellationToken ct,
         byte[] initialBuf, int initialLen, ClientHelloInfo? parsedHello, string passthroughReason,
-        PassthroughCaptureCoalescer.Group group, bool isFirst)
+        PassthroughCaptureCoalescer.Group? group, bool isFirst, bool isPassive = false)
     {
         var detail = isFirst ? LogLevel.Information : LogLevel.Debug;
+        CapturedRequest? passiveCapture = null;
         var started = DateTimeOffset.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var metadata = new TlsMetadata { PassthroughReason = passthroughReason };
@@ -726,7 +779,12 @@ public class TransparentProxyServer(
             // (Firestore streams, MQTT, push channels), and recording only at close left them
             // invisible in IoTSpy for as long as they stayed open. Bytes/duration are filled in below.
             // Only the group's first connection records a row; the rest add to its totals.
-            if (isFirst)
+            if (isPassive)
+            {
+                passiveCapture = await RecordPassthroughCaptureAsync(
+                    scope, clientIp, sniHost, port, started, metadata, clientHelloForDotCheck, passthroughReason, ct, isPassive: true);
+            }
+            else if (isFirst && group is not null)
             {
                 var capture = await RecordPassthroughCaptureAsync(
                     scope, clientIp, sniHost, port, started, metadata, clientHelloForDotCheck, passthroughReason, ct);
@@ -744,7 +802,16 @@ public class TransparentProxyServer(
             metadata.ServerToClientBytes = Interlocked.Read(ref serverToClient);
             sw.Stop();
 
-            await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
+            if (passiveCapture is not null)
+            {
+                // The passive buffer holds this same object: fill in the totals at close.
+                passiveCapture.DurationMs = sw.ElapsedMilliseconds;
+                passiveCapture.RequestBodySize = metadata.ClientToServerBytes;
+                passiveCapture.ResponseBodySize = metadata.ServerToClientBytes;
+                passiveCapture.TlsMetadataJson = JsonSerializer.Serialize(metadata);
+            }
+            else if (group is not null)
+                await UpdatePassthroughGroupAsync(scope, group, metadata, sniHost);
         }
 
         logger.Log(detail,
@@ -796,13 +863,14 @@ public class TransparentProxyServer(
 
     private async Task<CapturedRequest?> RecordPassthroughCaptureAsync(
         IServiceScope scope, string clientIp, string sniHost, int port, DateTimeOffset started,
-        TlsMetadata metadata, ClientHelloInfo? clientHello, string passthroughReason, CancellationToken ct)
+        TlsMetadata metadata, ClientHelloInfo? clientHello, string passthroughReason, CancellationToken ct,
+        bool isPassive = false)
     {
         try
         {
-            var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
-            var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+            var device = isPassive
+                ? null
+                : await GetOrRegisterDeviceAsync(scope.ServiceProvider.GetRequiredService<IDeviceRepository>(), clientIp, ct);
 
             // Flag likely DNS-over-TLS (port 853 or a known-resolver SNI) — encrypted payload
             // gives no further visibility, so this is the only detection signal available.
@@ -827,7 +895,8 @@ public class TransparentProxyServer(
                 TlsMetadataJson = JsonSerializer.Serialize(metadata)
             };
 
-            await captures.AddAsync(capture, ct);
+            if (isPassive) passiveBuffer.Add(capture);
+            else await scope.ServiceProvider.GetRequiredService<ICaptureRepository>().AddAsync(capture, ct);
             await publisher.PublishAsync(capture, ct);
             return capture;
         }
@@ -881,6 +950,10 @@ public class TransparentProxyServer(
         string clientIp, ProxySettings settings,
         IServiceScope scope, CancellationToken ct)
     {
+        // Passive (observe-only): forward unchanged — no OpenRTB stripping, manipulation rules,
+        // breakpoints or SSL stripping — and send exchanges to the passive buffer instead of the
+        // captures table, exactly like the explicit proxy's passive path.
+        var isPassive = settings.IsPassive;
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
 
@@ -940,15 +1013,15 @@ public class TransparentProxyServer(
             // OpenRTB PII stripping (runs before general manipulation rules)
             var contentType = ExtractHeaderValue(reqHeaders, "Content-Type") ?? "";
             var modified = false;
-            if (openRtbService.IsOpenRtbRequest(contentType, path, reqBody))
+            if (!isPassive && openRtbService.IsOpenRtbRequest(contentType, path, reqBody))
             {
                 var rtbModified = await openRtbService.ProcessAndStripAsync(httpMsg, ManipulationPhase.Request, ct);
                 if (rtbModified) modified = true;
             }
 
             // Phase 4: Apply request-phase manipulation rules
-            var manipModified = await manipulationService.ApplyAsync(httpMsg, ManipulationPhase.Request, ct);
-            if (manipModified) modified = true;
+            if (!isPassive && await manipulationService.ApplyAsync(httpMsg, ManipulationPhase.Request, ct))
+                modified = true;
 
             // A RewriteUrl rule (or a script) may have retargeted this request. Only switch the
             // upstream when the target actually changed — otherwise keep connecting to the
@@ -1006,7 +1079,7 @@ public class TransparentProxyServer(
             }
 
             // SSL stripping: intercept HTTPS redirects and follow them transparently
-            if (settings.SslStrip && statusLine is not null)
+            if (!isPassive && settings.SslStrip && statusLine is not null)
             {
                 ParseStatusLine(statusLine, out var redirectCode, out _);
                 var httpsLocation = SslStripService.GetHttpsRedirectLocation(redirectCode, respHeaders);
@@ -1031,7 +1104,7 @@ public class TransparentProxyServer(
             }
 
             // Apply response-phase manipulation pipeline
-            if (statusLine is not null)
+            if (!isPassive && statusLine is not null)
             {
                 ParseStatusLine(statusLine, out var sc, out _);
                 httpMsg.StatusLine = statusLine;
@@ -1062,7 +1135,7 @@ public class TransparentProxyServer(
             }
 
             // SSL strip: always remove HSTS and rewrite https links in non-redirect responses
-            if (settings.SslStrip && statusLine is not null)
+            if (!isPassive && settings.SslStrip && statusLine is not null)
             {
                 respHeaders = SslStripService.StripResponseHeaders(respHeaders);
             }
@@ -1086,7 +1159,8 @@ public class TransparentProxyServer(
             ParseRequestLine(reqLine ?? "", out method, out path, out query);
             ParseStatusLine(statusLine, out var statusCode, out var statusMsg);
 
-            var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+            // Passive doesn't write to the database, so it doesn't register devices either.
+            var device = isPassive ? null : await GetOrRegisterDeviceAsync(devices, clientIp, ct);
             var capture = new CapturedRequest
             {
                 DeviceId = device?.Id,
@@ -1118,17 +1192,46 @@ public class TransparentProxyServer(
             if (contentType.StartsWith("application/grpc", StringComparison.OrdinalIgnoreCase))
                 capture.Protocol = InterceptionProtocol.Grpc;
 
-            // Detect DNS-over-HTTPS (RFC 8484) and decode the embedded query for reporting
-            var dohResult = DohDetector.TryDetect(method, $"{path}{query}", reqHeaders, reqBody);
-            if (DohDetector.TryBuildPersistedMessage(dohResult, capture.DeviceId, capture.Timestamp) is { } dohMessage)
-                protocolMessageWriter.TryEnqueue(dohMessage);
+            var isWebSocketUpgrade = statusCode == 101 &&
+                respHeaders.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase);
 
-            await captures.AddAsync(capture, ct);
-            await publisher.PublishAsync(capture, ct);
+            if (isPassive)
+            {
+                if (isWebSocketUpgrade)
+                    capture.Protocol = scheme == "https" ? InterceptionProtocol.WebSocketTls : InterceptionProtocol.WebSocket;
+                passiveBuffer.Add(capture);
+                await publisher.PublishAsync(capture, ct);
+
+                if (isWebSocketUpgrade && transparentUpstream is not null)
+                {
+                    // Frame capture writes to the database; in passive just relay the upgraded
+                    // connection byte for byte until either side closes.
+                    // Both ends may be SslStreams (no socket to half-close), so when either
+                    // direction ends, end the other.
+                    using var wsRelay = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    var toServer = RelayAndCountAsync(clientStream, transparentUpstream, _ => { }, wsRelay.Token);
+                    var toClient = RelayAndCountAsync(transparentUpstream, clientStream, _ => { }, wsRelay.Token);
+                    await Task.WhenAny(toServer, toClient);
+                    await wsRelay.CancelAsync();
+                    await Task.WhenAll(toServer, toClient);
+                    connectionPool.Discard(transparentUpstream);
+                    transparentUpstreamReleased = true;
+                    break;
+                }
+            }
+            else
+            {
+                // Detect DNS-over-HTTPS (RFC 8484) and decode the embedded query for reporting
+                var dohResult = DohDetector.TryDetect(method, $"{path}{query}", reqHeaders, reqBody);
+                if (DohDetector.TryBuildPersistedMessage(dohResult, capture.DeviceId, capture.Timestamp) is { } dohMessage)
+                    protocolMessageWriter.TryEnqueue(dohMessage);
+
+                await captures.AddAsync(capture, ct);
+                await publisher.PublishAsync(capture, ct);
+            }
 
             // WebSocket upgrade — switch to frame relay mode
-            if (statusCode == 101 &&
-                respHeaders.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase))
+            if (isWebSocketUpgrade)
             {
                 capture.Protocol = scheme == "https"
                     ? InterceptionProtocol.WebSocketTls

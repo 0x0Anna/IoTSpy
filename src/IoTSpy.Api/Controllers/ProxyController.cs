@@ -61,7 +61,10 @@ public class ProxyController(IProxyService proxy) : ControllerBase
         if (!string.IsNullOrWhiteSpace(dto.CaOrganization)) settings.CaOrganization = dto.CaOrganization;
         if (!string.IsNullOrWhiteSpace(dto.CaCountry)) settings.CaCountry = dto.CaCountry;
         if (dto.CaValidityYears is > 0 and <= 30) settings.CaValidityYears = dto.CaValidityYears.Value;
-        if (dto.IsPassive == true) settings.Mode = ProxyMode.Passive;
+        // Passive is independent of the transport mode. A legacy client sending Mode = Passive is
+        // normalized to explicit proxy + IsPassive (by NormalizeLegacyPassiveMode on save).
+        settings.NormalizeLegacyPassiveMode();
+        settings.IsPassive = dto.IsPassive ?? settings.IsPassive;
         await proxy.UpdateSettingsAsync(settings, ct);
         return Ok(proxy.GetSettings());
     }

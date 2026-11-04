@@ -90,7 +90,15 @@ All phases 1–16, 18–22 plus API & Backend Polish, Frontend Usability enhance
 
 > Counts above last verified 2026-09-17. To re-check: `grep -rE "^\s*\[(Fact|Theory)" --include="*.cs" src/IoTSpy.*.Tests src/IoTSpy.Api.IntegrationTests | wc -l`, `ls src/IoTSpy.Api/Controllers | wc -l`, `ls src/IoTSpy.Storage/Migrations/*.cs | grep -vE "(Designer|Snapshot)" | wc -l`, `grep -rE "\[Http" --include="*.cs" src/IoTSpy.Api/Controllers | wc -l`.
 
-### Backlog closeout: OTEL, metrics/dashboards, scheduled-scan target lists (latest)
+### Passive as a flag on any proxy mode (latest)
+Passive used to be its own `ProxyMode` that always ran the explicit listener, so switching to it from GatewayRedirect removed the iptables redirect and redirected devices went unobserved. It is now `ProxySettings.IsPassive` (migration `AddProxySettingsIsPassive`; legacy `Mode = Passive` is normalized to ExplicitProxy + `IsPassive` on read/save), honoured by both `ExplicitProxyServer` and `TransparentProxyServer`:
+- Observe-only: no manipulation/OpenRTB/breakpoints/SSL strip, and connection-level Drop/Delay rules are skipped, so traffic flows unrestricted
+- TLS is still intercepted for observation when `CaptureTls` is on; otherwise relayed with handshake metadata only
+- Every record (HTTP(S), TLS passthrough, raw TCP, handshake failures) goes to the passive buffer, never the DB, and no devices are registered; passive passthrough connections aren't coalesced
+- Transparent passive sniffs plain ports: non-HTTP opening bytes (e.g. plain MQTT on 1883) are relayed byte for byte instead of entering the HTTP parser (active mode still parses them as HTTP)
+- UI: Passive Capture's Active/Passive toggle flips `isPassive` only (the #115 previous-mode restore logic is gone); Settings has a "Passive (observe-only)" checkbox instead of a mode option
+
+### Backlog closeout: OTEL, metrics/dashboards, scheduled-scan target lists (previous)
 Closed the last three open `docs/CODE-REVIEW-FINDINGS.md` items in parallel worktree PRs (#97, #98, #99) — see that doc's "Operational observability & scheduling" section for full detail. Headline: `ScheduledScanService` previously bypassed the scan-scope consent gate entirely for scheduled scans (fixed as part of #99, with an explicit regression test) — a real, pre-existing gap, not just a feature addition. #48, #56, and #59 were deliberately deferred rather than built, each requiring a product/architecture decision this session didn't have standing to make; rationale recorded in the findings doc.
 
 ### Report redesign: Scriban HTML + device/session-scoped reports (latest — closes #33)

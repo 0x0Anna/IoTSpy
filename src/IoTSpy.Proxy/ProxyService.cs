@@ -79,17 +79,21 @@ public class ProxyService(
 
     private async Task StartByModeAsync(ProxySettings settings, CancellationToken ct)
     {
+        // Passive (observe-only) is a flag on top of the transport, not a transport itself: the
+        // listeners read it per connection, so GatewayRedirect keeps its iptables redirect.
+        settings.NormalizeLegacyPassiveMode();
+        var observe = settings.IsPassive ? " (passive, observe-only)" : string.Empty;
         switch (settings.Mode)
         {
             case ProxyMode.ExplicitProxy:
                 await explicitProxy.StartAsync(settings.ProxyPort, settings.ListenAddress, ct);
-                logger.LogInformation("Explicit proxy started on port {Port}", settings.ProxyPort);
+                logger.LogInformation("Explicit proxy started on port {Port}{Observe}", settings.ProxyPort, observe);
                 break;
 
             case ProxyMode.GatewayRedirect:
                 await transparentProxy.StartAsync(settings.TransparentProxyPort, settings.ListenAddress, ct);
                 await iptablesHelper.InstallRedirectRulesAsync(settings.TransparentProxyPort, inboundInterface: RedirectInterface(settings));
-                logger.LogInformation("GatewayRedirect mode started on port {Port}", settings.TransparentProxyPort);
+                logger.LogInformation("GatewayRedirect mode started on port {Port}{Observe}", settings.TransparentProxyPort, observe);
                 break;
 
             case ProxyMode.ArpSpoof:
@@ -99,14 +103,8 @@ public class ProxyService(
                     settings.TargetDeviceIp,
                     settings.GatewayIp,
                     settings.NetworkInterface, ct);
-                logger.LogInformation("ArpSpoof mode started targeting {Target} via {Gateway}",
-                    settings.TargetDeviceIp, settings.GatewayIp);
-                break;
-
-            case ProxyMode.Passive:
-                // Passive uses the explicit proxy listener but skips manipulation & DB inserts
-                await explicitProxy.StartAsync(settings.ProxyPort, settings.ListenAddress, ct);
-                logger.LogInformation("Passive proxy started on port {Port} — observe-only mode", settings.ProxyPort);
+                logger.LogInformation("ArpSpoof mode started targeting {Target} via {Gateway}{Observe}",
+                    settings.TargetDeviceIp, settings.GatewayIp, observe);
                 break;
         }
     }

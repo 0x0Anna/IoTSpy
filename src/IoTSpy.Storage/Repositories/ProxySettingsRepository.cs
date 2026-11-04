@@ -10,7 +10,12 @@ public class ProxySettingsRepository(IoTSpyDbContext db, IConfiguration? configu
     public async Task<ProxySettings> GetAsync(CancellationToken ct = default)
     {
         var settings = await db.ProxySettings.OrderBy(p => p.Id).FirstOrDefaultAsync(ct);
-        if (settings is not null) return settings;
+        if (settings is not null)
+        {
+            if (settings.NormalizeLegacyPassiveMode())
+                await db.SaveChangesAsync(ct);
+            return settings;
+        }
 
         // First-run defaults. Proxy:DefaultPort lets deployments (e.g. the
         // Asustor NAS package) seed a non-standard port to avoid colliding
@@ -25,6 +30,7 @@ public class ProxySettingsRepository(IoTSpyDbContext db, IConfiguration? configu
 
     public async Task<ProxySettings> SaveAsync(ProxySettings settings, CancellationToken ct = default)
     {
+        settings.NormalizeLegacyPassiveMode();
         var existing = await db.ProxySettings.OrderBy(p => p.Id).FirstOrDefaultAsync(ct);
         if (existing is null)
         {

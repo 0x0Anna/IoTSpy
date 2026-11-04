@@ -1,4 +1,5 @@
 using IoTSpy.Api.Controllers;
+using IoTSpy.Core.Enums;
 using IoTSpy.Core.Interfaces;
 using IoTSpy.Core.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -112,5 +113,67 @@ public class ProxyControllerTests
 
         Assert.IsType<BadRequestObjectResult>(result);
         await proxy.DidNotReceive().UpdateSettingsAsync(Arg.Any<ProxySettings>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task UpdateSettings_IsPassive_KeepsTransportMode()
+    {
+        var proxy = CreateProxyService();
+        proxy.GetSettings().Mode = ProxyMode.GatewayRedirect;
+        ProxySettings? saved = null;
+        proxy.UpdateSettingsAsync(Arg.Do<ProxySettings>(s => saved = s), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var controller = new ProxyController(proxy);
+
+        await controller.UpdateSettings(new UpdateProxySettingsDto(IsPassive: true), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(saved);
+        Assert.True(saved!.IsPassive);
+        Assert.Equal(ProxyMode.GatewayRedirect, saved.Mode);
+    }
+
+    [Fact]
+    public async Task UpdateSettings_IsPassiveFalse_LeavesPassive()
+    {
+        var proxy = CreateProxyService();
+        proxy.GetSettings().Mode = ProxyMode.GatewayRedirect;
+        proxy.GetSettings().IsPassive = true;
+        ProxySettings? saved = null;
+        proxy.UpdateSettingsAsync(Arg.Do<ProxySettings>(s => saved = s), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var controller = new ProxyController(proxy);
+
+        await controller.UpdateSettings(new UpdateProxySettingsDto(IsPassive: false), TestContext.Current.CancellationToken);
+
+        Assert.False(saved!.IsPassive);
+        Assert.Equal(ProxyMode.GatewayRedirect, saved.Mode);
+    }
+
+    [Fact]
+    public async Task UpdateSettings_OmittedIsPassive_PreservesIt()
+    {
+        var proxy = CreateProxyService();
+        proxy.GetSettings().IsPassive = true;
+        ProxySettings? saved = null;
+        proxy.UpdateSettingsAsync(Arg.Do<ProxySettings>(s => saved = s), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var controller = new ProxyController(proxy);
+
+        await controller.UpdateSettings(new UpdateProxySettingsDto(ProxyPort: 8899), TestContext.Current.CancellationToken);
+
+        Assert.True(saved!.IsPassive);
+    }
+
+    [Fact]
+    public async Task UpdateSettings_LegacyPassiveMode_NormalizedToExplicitPlusFlag()
+    {
+        var proxy = CreateProxyService();
+        ProxySettings? saved = null;
+        proxy.UpdateSettingsAsync(Arg.Do<ProxySettings>(s => saved = s), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var controller = new ProxyController(proxy);
+
+#pragma warning disable CS0618 // exercising the legacy value on purpose
+        await controller.UpdateSettings(new UpdateProxySettingsDto(Mode: ProxyMode.Passive), TestContext.Current.CancellationToken);
+#pragma warning restore CS0618
+
+        Assert.Equal(ProxyMode.ExplicitProxy, saved!.Mode);
+        Assert.True(saved.IsPassive);
     }
 }

@@ -176,7 +176,10 @@ public class ExplicitProxyServer(
         // Drop/Delay rules matching the tunnel itself (CONNECT host:port): delay answering it, and/or
         // refuse it outright. Delay applies only to tunnels relayed untouched; intercepted HTTP
         // gets the Delay per request instead.
-        var connRules = await manipulationService.MatchConnectionRulesAsync(host, port, ct);
+        // Passive (observe-only) never acts on traffic, so no rule applies.
+        var connRules = settings.IsPassive
+            ? ConnectionRuleMatch.None
+            : await manipulationService.MatchConnectionRulesAsync(host, port, ct);
         if (!settings.CaptureTls && connRules.TotalDelayMs > 0)
             await Task.Delay(connRules.TotalDelayMs, ct);
         if (connRules.Drop is { } dropRule)
@@ -190,9 +193,11 @@ public class ExplicitProxyServer(
         var ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
         await clientStream.WriteAsync(ok, ct);
 
+        // TLS interception off: relay the tunnel untouched, recording only what is visible on the
+        // wire. In passive that record goes to the passive buffer, not the database.
         if (!settings.CaptureTls)
         {
-            await HandleTlsPassthroughAsync(clientStream, host, port, clientIp, scope, ct);
+            await HandleTlsPassthroughAsync(clientStream, host, port, clientIp, scope, ct, settings.IsPassive);
             return;
         }
 
@@ -265,7 +270,7 @@ public class ExplicitProxyServer(
         CancellationToken ct,
         (string reqLine, string reqHeaders, string reqBody, byte[] reqBodyBytes)? initialRequest = null)
     {
-        var isPassive = settings.Mode == Core.Enums.ProxyMode.Passive;
+        var isPassive = settings.IsPassive;
         var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
         var captures = isPassive ? null : scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
 
@@ -821,7 +826,7 @@ public class ExplicitProxyServer(
 
     private async Task HandleTlsPassthroughAsync(
         NetworkStream clientStream, string connectHost, int port,
-        string clientIp, IServiceScope scope, CancellationToken ct)
+        string clientIp, IServiceScope scope, CancellationToken ct, bool isPassive = false)
     {
         var started = DateTimeOffset.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -987,10 +992,11 @@ public class ExplicitProxyServer(
 
         sw.Stop();
 
-        // Record capture
-        var devices = scope.ServiceProvider.GetRequiredService<IDeviceRepository>();
-        var captures = scope.ServiceProvider.GetRequiredService<ICaptureRepository>();
-        var device = await GetOrRegisterDeviceAsync(devices, clientIp, ct);
+        // Record capture (passive: to the passive buffer, and no device registration — passive
+        // doesn't write to the database)
+        var device = isPassive
+            ? null
+            : await GetOrRegisterDeviceAsync(scope.ServiceProvider.GetRequiredService<IDeviceRepository>(), clientIp, ct);
 
         // Flag likely DNS-over-TLS (port 853 or a known-resolver SNI) — encrypted payload
         // gives no further visibility, so this is the only detection signal available.
@@ -1017,7 +1023,14 @@ public class ExplicitProxyServer(
             TlsMetadataJson = JsonSerializer.Serialize(metadata)
         };
 
-        captureBatchWriter.TryEnqueue(capture);
+        if (isPassive)
+        {
+            capture.StatusMessage = "passthrough: TLS interception off (passive)";
+            passiveBuffer.Add(capture);
+            await publisher.PublishAsync(capture, ct);
+        }
+        else
+            captureBatchWriter.TryEnqueue(capture);
 
         logger.LogInformation(
             "TLS passthrough complete: {ClientIp}→{SniHostname}:{Port} Duration={DurationMs}ms " +

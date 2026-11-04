@@ -13,6 +13,7 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
   const [proxyPort, setProxyPort] = useState(String(settings.proxyPort))
   const [listenAddress, setListenAddress] = useState(settings.listenAddress)
   const [mode, setMode] = useState<ProxyMode>(settings.mode)
+  const [isPassive, setIsPassive] = useState(settings.isPassive ?? false)
   const [captureTls, setCaptureTls] = useState(settings.captureTls)
   const [captureRequestBodies, setCaptureRequestBodies] = useState(settings.captureRequestBodies)
   const [captureResponseBodies, setCaptureResponseBodies] = useState(settings.captureResponseBodies)
@@ -64,6 +65,7 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
       proxyPort: port,
       listenAddress,
       mode,
+      isPassive,
       captureTls,
       captureRequestBodies,
       captureResponseBodies,
@@ -153,14 +155,22 @@ export default function SettingsModal({ settings, onSave, onClose }: Props) {
               <option value="ExplicitProxy">Explicit Proxy</option>
               <option value="GatewayRedirect">Gateway Redirect</option>
               <option value="ArpSpoof">ARP Spoof</option>
-              <option value="Passive">Passive (observe-only)</option>
             </select>
-            {mode === 'Passive' && (
-              <div className="settings-hint">
-                Passive mode can also be controlled from the <strong>Passive Capture</strong> panel in the dashboard — that panel includes start/stop controls and device-filter options.
-              </div>
-            )}
           </div>
+
+          <label className="settings-checkbox-row">
+            <input
+              type="checkbox"
+              checked={isPassive}
+              onChange={(e) => setIsPassive(e.target.checked)}
+            />
+            Passive (observe-only)
+          </label>
+          {isPassive && (
+            <div className="settings-hint">
+              Works with any proxy mode: traffic is forwarded unchanged (no rules, breakpoints or tarpits) and buffered in memory instead of the database. HTTPS is still decrypted for observation while TLS interception is on. Also controlled from the <strong>Passive Capture</strong> panel, which has the device filter and session saving.
+            </div>
+          )}
 
           {(mode === 'GatewayRedirect' || mode === 'ArpSpoof') && (
             <div className="settings-field" style={{ maxWidth: 180 }}>
