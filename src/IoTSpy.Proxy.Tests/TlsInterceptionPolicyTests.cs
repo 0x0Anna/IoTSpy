@@ -73,6 +73,23 @@ public class TlsInterceptionPolicyTests
     public void LooksLikeTlsHandshake(string hex, bool expected) =>
         Assert.Equal(expected, TransparentProxyServer.LooksLikeTlsHandshake(Convert.FromHexString(hex)));
 
+    [Theory]
+    [InlineData("GET / HTTP/1.1\r\n", true)]
+    [InlineData("POST /api HTTP/1.1\r\n", true)]
+    [InlineData("OPTIONS * HTTP/1.1\r\n", true)]
+    [InlineData("GE", true)]                    // short first read: can't rule HTTP out
+    [InlineData("GETX /", false)]               // no space after the method
+    [InlineData("get / HTTP/1.1", false)]       // methods are case-sensitive
+    [InlineData("", false)]
+    public void LooksLikeHttpRequest_Text(string text, bool expected) =>
+        Assert.Equal(expected, TransparentProxyServer.LooksLikeHttpRequest(System.Text.Encoding.ASCII.GetBytes(text)));
+
+    [Theory]
+    [InlineData("100c00044d5154540402003c0000", false)] // MQTT 3.1.1 CONNECT (plain MQTT on 1883)
+    [InlineData("160301", false)]                       // TLS on a plain port
+    public void LooksLikeHttpRequest_Binary(string hex, bool expected) =>
+        Assert.Equal(expected, TransparentProxyServer.LooksLikeHttpRequest(Convert.FromHexString(hex)));
+
     // ── Bypass list ──────────────────────────────────────────────────────────
 
     [Theory]

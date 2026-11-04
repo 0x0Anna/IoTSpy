@@ -1365,6 +1365,9 @@ namespace IoTSpy.Storage.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsPassive")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("IsRunning")
                         .HasColumnType("INTEGER");
 

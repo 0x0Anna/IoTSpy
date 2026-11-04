@@ -124,7 +124,7 @@ export default function DashboardPage() {
   const proxyStatus = proxy.status
   const isRunning = proxyStatus?.isRunning ?? false
   const port = proxyStatus?.port ?? proxyStatus?.settings?.proxyPort ?? 8888
-  const isPassive = proxyStatus?.settings?.mode === 'Passive'
+  const isPassive = proxyStatus?.settings?.isPassive ?? false
 
   return (
     <AppShell

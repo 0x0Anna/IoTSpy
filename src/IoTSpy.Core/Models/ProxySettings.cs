@@ -7,6 +7,12 @@ public class ProxySettings
     public int Id { get; set; } = 1;
     public int ProxyPort { get; set; } = 8888;
     public ProxyMode Mode { get; set; } = ProxyMode.ExplicitProxy;
+
+    /// <summary>Observe-only: traffic is forwarded unchanged (no manipulation rules, breakpoints,
+    /// OpenRTB stripping or SSL stripping) and HTTP exchanges go to the passive capture buffer
+    /// instead of the captures table. Independent of <see cref="Mode"/>, so it works with any
+    /// transport — e.g. GatewayRedirect keeps its iptables redirect while observing.</summary>
+    public bool IsPassive { get; set; }
     public bool IsRunning { get; set; }
     public bool CaptureTls { get; set; } = true;
     public bool CaptureRequestBodies { get; set; } = true;
@@ -48,4 +54,19 @@ public class ProxySettings
     // ── Startup behaviour ────────────────────────────────────────────────
     /// <summary>Automatically start the proxy when the server process starts.</summary>
     public bool AutoStart { get; set; }
+
+    /// <summary>
+    /// Passive used to be a <see cref="Mode"/> of its own (always on the explicit-proxy listener).
+    /// Rewrites a stored or submitted <c>Mode = Passive</c> to explicit proxy + <see cref="IsPassive"/>.
+    /// Returns true when anything changed.
+    /// </summary>
+    public bool NormalizeLegacyPassiveMode()
+    {
+#pragma warning disable CS0618 // the legacy value is exactly what is being rewritten here
+        if (Mode != ProxyMode.Passive) return false;
+#pragma warning restore CS0618
+        Mode = ProxyMode.ExplicitProxy;
+        IsPassive = true;
+        return true;
+    }
 }

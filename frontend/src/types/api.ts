@@ -15,7 +15,8 @@ export type InterceptionProtocol =
   | 'TlsPassthrough'
   | 'Other'
 
-export type ProxyMode = 'ExplicitProxy' | 'ArpSpoof' | 'GatewayRedirect' | 'Passive'
+// Passive is no longer a mode — see ProxySettings.isPassive, which works with any of these.
+export type ProxyMode = 'ExplicitProxy' | 'ArpSpoof' | 'GatewayRedirect'
 
 // ── Domain models ─────────────────────────────────────────────────────────────
 
@@ -79,6 +80,8 @@ export interface ProxySettings {
   id: number
   proxyPort: number
   mode: ProxyMode
+  /** Observe-only: no manipulation, exchanges go to the passive buffer. Independent of mode. */
+  isPassive: boolean
   isRunning: boolean
   captureTls: boolean
   captureRequestBodies: boolean
@@ -296,6 +299,7 @@ export interface ProxySettingsUpdate {
   captureResponseBodies?: boolean
   maxBodySizeKb?: number
   mode?: ProxyMode
+  isPassive?: boolean
   autoStart?: boolean
   transparentProxyPort?: number
   targetDeviceIp?: string
