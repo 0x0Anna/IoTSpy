@@ -38,7 +38,7 @@ vi.mock('../api/passiveCapture', () => ({
   setDeviceFilter: vi.fn(),
 }))
 
-function statusWith(mode: ProxyStatus['settings']['mode']): ProxyStatus {
+function statusWith(mode: ProxyStatus['settings']['mode'], isPassive = false): ProxyStatus {
   return {
     isRunning: true,
     port: 8888,
@@ -46,6 +46,7 @@ function statusWith(mode: ProxyStatus['settings']['mode']): ProxyStatus {
       id: 1,
       proxyPort: 8888,
       mode,
+      isPassive,
       isRunning: true,
       captureTls: true,
       captureRequestBodies: true,
@@ -68,44 +69,33 @@ function statusWith(mode: ProxyStatus['settings']['mode']): ProxyStatus {
   }
 }
 
-describe('PassiveCaptureSummary — mode restore', () => {
+describe('PassiveCaptureSummary — passive toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockSaveSettings.mockResolvedValue(null)
   })
 
-  it('restores GatewayRedirect (not ExplicitProxy) when leaving Passive mode', async () => {
+  it('turns passive on without touching the transport mode', async () => {
     mockStatus = statusWith('GatewayRedirect')
-    const { rerender } = render(<PassiveCaptureSummary />)
+    render(<PassiveCaptureSummary />)
 
     await userEvent.click(screen.getByRole('button', { name: 'Passive' }))
-    expect(mockSaveSettings).toHaveBeenCalledWith({ mode: 'Passive' })
-
-    // The server is now in Passive mode; the hook's data reflects that after the save.
-    mockStatus = statusWith('Passive')
-    rerender(<PassiveCaptureSummary />)
-
-    await userEvent.click(screen.getByRole('button', { name: 'Active' }))
-    expect(mockSaveSettings).toHaveBeenLastCalledWith({ mode: 'GatewayRedirect' })
+    expect(mockSaveSettings).toHaveBeenCalledWith({ isPassive: true })
   })
 
-  it('restores ArpSpoof (not ExplicitProxy) when leaving Passive mode', async () => {
-    mockStatus = statusWith('ArpSpoof')
-    const { rerender } = render(<PassiveCaptureSummary />)
-
-    await userEvent.click(screen.getByRole('button', { name: 'Passive' }))
-    mockStatus = statusWith('Passive')
-    rerender(<PassiveCaptureSummary />)
-
-    await userEvent.click(screen.getByRole('button', { name: 'Active' }))
-    expect(mockSaveSettings).toHaveBeenLastCalledWith({ mode: 'ArpSpoof' })
-  })
-
-  it('falls back to ExplicitProxy when no prior mode was ever observed', async () => {
-    mockStatus = statusWith('Passive')
+  it('turns passive off without touching the transport mode', async () => {
+    mockStatus = statusWith('GatewayRedirect', true)
     render(<PassiveCaptureSummary />)
 
     await userEvent.click(screen.getByRole('button', { name: 'Active' }))
-    expect(mockSaveSettings).toHaveBeenCalledWith({ mode: 'ExplicitProxy' })
+    expect(mockSaveSettings).toHaveBeenCalledWith({ isPassive: false })
+  })
+
+  it('shows the passive state from the flag, whatever the mode', () => {
+    mockStatus = statusWith('ArpSpoof', true)
+    render(<PassiveCaptureSummary />)
+
+    expect(screen.getByText('Passive — observing, not recording')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Passive' })).toBeDisabled()
   })
 })

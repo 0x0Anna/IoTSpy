@@ -81,4 +81,41 @@ public class ProxySettingsRepositoryTests : IDisposable
         var reloaded = await repo.GetAsync(TestContext.Current.CancellationToken);
         Assert.Equal(7777, reloaded.ProxyPort);
     }
+
+    [Fact]
+    public async Task GetAsync_LegacyPassiveMode_IsNormalizedAndPersisted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+#pragma warning disable CS0618 // a database written before IsPassive existed
+        _db.ProxySettings.Add(new ProxySettings { Mode = ProxyMode.Passive });
+#pragma warning restore CS0618
+        await _db.SaveChangesAsync(ct);
+        var repo = new ProxySettingsRepository(_db);
+
+        var settings = await repo.GetAsync(ct);
+
+        Assert.Equal(ProxyMode.ExplicitProxy, settings.Mode);
+        Assert.True(settings.IsPassive);
+        _db.ChangeTracker.Clear();
+        var stored = Assert.Single(_db.ProxySettings);
+        Assert.Equal(ProxyMode.ExplicitProxy, stored.Mode);
+        Assert.True(stored.IsPassive);
+    }
+
+    [Fact]
+    public async Task SaveAsync_PassiveWithGatewayRedirect_RoundTrips()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var repo = new ProxySettingsRepository(_db);
+        var settings = await repo.GetAsync(ct);
+        settings.Mode = ProxyMode.GatewayRedirect;
+        settings.IsPassive = true;
+        await repo.SaveAsync(settings, ct);
+
+        _db.ChangeTracker.Clear();
+        var reloaded = await repo.GetAsync(ct);
+
+        Assert.Equal(ProxyMode.GatewayRedirect, reloaded.Mode);
+        Assert.True(reloaded.IsPassive);
+    }
 }

@@ -5,7 +5,7 @@ import SettingsModal from '../components/proxy/SettingsModal'
 import type { ProxySettings } from '../types/api'
 
 const settings: ProxySettings = {
-  id: 1, proxyPort: 8888, mode: 'GatewayRedirect', isRunning: true, captureTls: true,
+  id: 1, proxyPort: 8888, mode: 'GatewayRedirect', isPassive: false, isRunning: true, captureTls: true,
   captureRequestBodies: true, captureResponseBodies: true, maxBodySizeKb: 1024, listenAddress: '0.0.0.0',
   passwordHash: '', autoStart: true, transparentProxyPort: 9999, targetDeviceIp: '', gatewayIp: '',
   networkInterface: '', caCommonName: 'IoTSpy CA', caOrganization: 'IoTSpy', caCountry: 'US', caValidityYears: 10,
@@ -34,5 +34,19 @@ describe('SettingsModal TLS passthrough', () => {
     render(<SettingsModal settings={{ ...settings, captureTls: false }} onSave={vi.fn()} onClose={vi.fn()} />)
 
     expect(screen.queryByLabelText(/TLS passthrough hosts/)).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsModal passive toggle', () => {
+  it('saves passive alongside the chosen transport mode', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockResolvedValue(settings)
+    render(<SettingsModal settings={settings} onSave={onSave} onClose={vi.fn()} />)
+
+    expect(screen.queryByRole('option', { name: /passive/i })).not.toBeInTheDocument()
+    await user.click(screen.getByLabelText(/Passive \(observe-only\)/))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ mode: 'GatewayRedirect', isPassive: true }))
   })
 })

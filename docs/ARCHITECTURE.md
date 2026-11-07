@@ -61,7 +61,7 @@ Domain models live in `IoTSpy.Core/Models/`; DTOs and result types are co-locate
 |---|---|
 | `CapturedRequest` | One intercepted HTTP/HTTPS exchange; includes request + response headers/body, TLS flag, protocol, timestamp, durationMs, `IsModified`, `TlsMetadataJson` |
 | `Device` | IoT device record: IP, MAC, hostname, vendor, label, `SecurityScore` |
-| `ProxySettings` | Singleton config row (Id=1): ports, mode, TLS/body capture flags, PBKDF2 password hash, `SslStrip` toggle, `AutoStart` flag |
+| `ProxySettings` | Singleton config row (Id=1): ports, mode, `IsPassive` (observe-only, works with any mode), TLS/body capture flags, PBKDF2 password hash, `SslStrip` toggle, `AutoStart` flag |
 | `TlsMetadata` | All metadata extracted from TLS handshake during passthrough mode: SNI, JA3/JA3S, cipher suites, server cert details, byte counts (serialized as JSON in `CapturedRequest.TlsMetadataJson`) |
 | `User` | Multi-user RBAC identity: username, PBKDF2 password hash, `UserRole` (Admin/Operator/Viewer), `IsEnabled`, timestamps |
 | `AuditEntry` | Immutable audit trail entry: actor user ID, action name, target, details JSON, timestamp |
@@ -111,7 +111,7 @@ Domain models live in `IoTSpy.Core/Models/`; DTOs and result types are co-locate
 
 | Enum | Values |
 |---|---|
-| `ProxyMode` | ExplicitProxy, ArpSpoof, GatewayRedirect, Passive |
+| `ProxyMode` | ExplicitProxy, ArpSpoof, GatewayRedirect, Passive (legacy — normalized to ExplicitProxy + `ProxySettings.IsPassive`) |
 | `UserRole` | Admin, Operator, Viewer |
 | `InterceptionProtocol` | Http, Https, Mqtt, MqttTls, CoAP, Dns, MDns, WebSocket, WebSocketTls, Grpc, Modbus, TlsPassthrough, Other |
 | `ScanStatus` | Pending, Running, Completed, Failed, Cancelled |

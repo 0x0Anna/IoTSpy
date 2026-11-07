@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import '../../styles/passive.css'
-import type { PassiveCaptureSummary as Summary, PassiveCaptureSession, ProxyMode } from '../../types/api'
+import type { PassiveCaptureSummary as Summary, PassiveCaptureSession } from '../../types/api'
 import { useProxy } from '../../hooks/useProxy'
 import {
   clearBuffer,
@@ -21,7 +21,7 @@ interface Props {
 export default function PassiveCaptureSummary({ embedded = false }: Props) {
   const proxy = useProxy()
   const settings = proxy.status?.settings ?? null
-  const isPassive = settings?.mode === 'Passive'
+  const isPassive = settings?.isPassive ?? false
   const isRunning = proxy.status?.isRunning ?? false
   const isPassiveActive = isPassive && isRunning
 
@@ -38,21 +38,14 @@ export default function PassiveCaptureSummary({ embedded = false }: Props) {
   const [saveDesc, setSaveDesc] = useState('')
   const [saveClear, setSaveClear] = useState(false)
 
-  // The mode to restore when leaving Passive. Tracks the last non-Passive mode seen from the
-  // server (GatewayRedirect, ArpSpoof, ExplicitProxy), so "Active" puts the proxy back exactly
-  // where it was instead of assuming ExplicitProxy — switching away from, say, GatewayRedirect
-  // and back used to silently drop the device back to ExplicitProxy.
-  const [previousMode, setPreviousMode] = useState<ProxyMode>('ExplicitProxy')
-  useEffect(() => {
-    if (settings?.mode && settings.mode !== 'Passive') setPreviousMode(settings.mode)
-  }, [settings?.mode])
-
-  // Mode toggle — proxy lifecycle (start/stop) stays in the header
+  // Passive is a flag on top of the transport mode (Explicit / Gateway Redirect / ARP Spoof),
+  // so toggling it never changes how traffic reaches the proxy.
+  // Proxy lifecycle (start/stop) stays in the header.
   async function handleSetPassive(passive: boolean) {
     setModeLoading(true)
     setError(null)
     try {
-      await proxy.saveSettings({ mode: passive ? 'Passive' : previousMode })
+      await proxy.saveSettings({ isPassive: passive })
       if (!passive) setSummary(null)
     } catch {
       setError('Failed to switch mode.')
@@ -189,7 +182,7 @@ export default function PassiveCaptureSummary({ embedded = false }: Props) {
               <button className="passive-summary__info-close" onClick={() => setInfoOpen(false)} aria-label="Close">✕</button>
               <strong>Active</strong> — all traffic is recorded to the database. Manipulation rules and anomaly detection run per request.
               <br /><br />
-              <strong>Passive</strong> — traffic passes through unchanged. Nothing is written to the database; observations are buffered in memory until you save a named session.
+              <strong>Passive</strong> — traffic passes through unchanged, using the same proxy mode (explicit, gateway redirect or ARP spoof). No rules, breakpoints or tarpits apply. HTTPS is decrypted for observation when TLS interception is on, otherwise relayed untouched with only its handshake metadata recorded. Nothing is written to the database; observations are buffered in memory until you save a named session.
             </div>
           )}
         </div>
